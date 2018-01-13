@@ -232,7 +232,9 @@ class LoadBalancer implements ILoadBalancer {
 		$this->host = isset( $params['hostname'] )
 			? $params['hostname']
 			: ( gethostname() ?: 'unknown' );
-		$this->cliMode = isset( $params['cliMode'] ) ? $params['cliMode'] : PHP_SAPI === 'cli';
+		$this->cliMode = isset( $params['cliMode'] )
+			? $params['cliMode']
+			: ( PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg' );
 		$this->agent = isset( $params['agent'] ) ? $params['agent'] : '';
 
 		if ( isset( $params['chronologyProtector'] ) ) {
@@ -939,7 +941,7 @@ class LoadBalancer implements ILoadBalancer {
 	 * @return bool
 	 */
 	private function isOpen( $index ) {
-		if ( !is_integer( $index ) ) {
+		if ( !is_int( $index ) ) {
 			return false;
 		}
 
@@ -1078,26 +1080,6 @@ class LoadBalancer implements ILoadBalancer {
 
 	public function getServerType( $i ) {
 		return isset( $this->mServers[$i]['type'] ) ? $this->mServers[$i]['type'] : 'unknown';
-	}
-
-	/**
-	 * @deprecated Since 1.30, no alternative
-	 */
-	public function getServerInfo( $i ) {
-		wfDeprecated( __METHOD__, '1.30' );
-		if ( isset( $this->mServers[$i] ) ) {
-			return $this->mServers[$i];
-		} else {
-			return false;
-		}
-	}
-
-	/**
-	 * @deprecated Since 1.30, construct new object
-	 */
-	public function setServerInfo( $i, array $serverInfo ) {
-		wfDeprecated( __METHOD__, '1.30' );
-		$this->mServers[$i] = $serverInfo;
 	}
 
 	public function getMasterPos() {

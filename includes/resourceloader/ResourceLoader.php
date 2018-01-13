@@ -236,8 +236,6 @@ class ResourceLoader implements LoggerAwareInterface {
 		return $data;
 	}
 
-	/* Methods */
-
 	/**
 	 * Register core modules and runs registration hooks.
 	 * @param Config $config [optional]
@@ -692,7 +690,6 @@ class ResourceLoader implements LoggerAwareInterface {
 	 *
 	 * @since 1.28
 	 * @param ResourceLoaderContext $context
-	 * @param string[] $modules List of module names
 	 * @return string Hash
 	 */
 	public function makeVersionQuery( ResourceLoaderContext $context ) {
@@ -1209,8 +1206,6 @@ MESSAGE;
 		}
 		return $moduleNames;
 	}
-
-	/* Static Methods */
 
 	/**
 	 * Return JS code that calls mw.loader.implement with given module properties.

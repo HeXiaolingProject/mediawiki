@@ -65,8 +65,6 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	# pages like Special:UserLogin and Special:Preferences
 	protected $origin = self::ORIGIN_CORE_SITEWIDE;
 
-	/* Protected Members */
-
 	protected $name = null;
 	protected $targets = [ 'desktop' ];
 
@@ -94,8 +92,6 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 */
 	protected $logger;
 
-	/* Methods */
-
 	/**
 	 * Get this module's name. This is set when the module is registered
 	 * with ResourceLoader::register()
@@ -110,7 +106,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 * Set this module's name. This is called by ResourceLoader::register()
 	 * when registering the module. Other code should not call this.
 	 *
-	 * @param string $name Name
+	 * @param string $name
 	 */
 	public function setName( $name ) {
 		$this->name = $name;
@@ -932,7 +928,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 * Get this module's last modification timestamp for a given context.
 	 *
 	 * @deprecated since 1.26 Use getDefinitionSummary() instead
-	 * @param ResourceLoaderContext $context Context object
+	 * @param ResourceLoaderContext $context
 	 * @return int|null UNIX timestamp
 	 */
 	public function getModifiedTime( ResourceLoaderContext $context ) {

@@ -24,7 +24,6 @@ if ( !defined( 'MEDIAWIKI' ) ) {
 	die( "This file is part of MediaWiki, it is not a valid entry point" );
 }
 
-use Liuggio\StatsdClient\Sender\SocketSender;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\ProcOpenError;
 use MediaWiki\Session\SessionManager;
@@ -1011,7 +1010,7 @@ function wfMakeUrlIndexes( $url ) {
 
 /**
  * Check whether a given URL has a domain that occurs in a given set of domains
- * @param string $url URL
+ * @param string $url
  * @param array $domains Array of domains (strings)
  * @return bool True if the host part of $url ends in one of the strings in $domains
  */
@@ -1231,6 +1230,7 @@ function wfErrorLog( $text, $file, array $context = [] ) {
 
 /**
  * @todo document
+ * @todo Move logic to MediaWiki.php
  */
 function wfLogProfilingData() {
 	global $wgDebugLogGroups, $wgDebugRawPage;
@@ -1242,23 +1242,13 @@ function wfLogProfilingData() {
 	$profiler->setContext( $context );
 	$profiler->logData();
 
-	$config = $context->getConfig();
-	$stats = MediaWikiServices::getInstance()->getStatsdDataFactory();
-	if ( $config->get( 'StatsdServer' ) && $stats->hasData() ) {
-		try {
-			$statsdServer = explode( ':', $config->get( 'StatsdServer' ) );
-			$statsdHost = $statsdServer[0];
-			$statsdPort = isset( $statsdServer[1] ) ? $statsdServer[1] : 8125;
-			$statsdSender = new SocketSender( $statsdHost, $statsdPort );
-			$statsdClient = new SamplingStatsdClient( $statsdSender, true, false );
-			$statsdClient->setSamplingRates( $config->get( 'StatsdSamplingRates' ) );
-			$statsdClient->send( $stats->getData() );
-		} catch ( Exception $ex ) {
-			MWExceptionHandler::logException( $ex );
-		}
-	}
+	// Send out any buffered statsd metrics as needed
+	MediaWiki::emitBufferedStatsdData(
+		MediaWikiServices::getInstance()->getStatsdDataFactory(),
+		$context->getConfig()
+	);
 
-	# Profiling must actually be enabled...
+	// Profiling must actually be enabled...
 	if ( $profiler instanceof ProfilerStub ) {
 		return;
 	}
@@ -2099,6 +2089,16 @@ function wfIsHHVM() {
 }
 
 /**
+ * Check if we are running from the commandline
+ *
+ * @since 1.31
+ * @return bool
+ */
+function wfIsCLI() {
+	return PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg';
+}
+
+/**
  * Tries to get the system directory for temporary files. First
  * $wgTmpDirectory is checked, and then the TMPDIR, TMP, and TEMP
  * environment variables are then checked in sequence, then
@@ -2920,7 +2920,7 @@ function wfGetLBFactory() {
  * Find a file.
  * Shortcut for RepoGroup::singleton()->findFile()
  *
- * @param string $title String or Title object
+ * @param string|Title $title String or Title object
  * @param array $options Associative array of options (see RepoGroup::findFile)
  * @return File|bool File, or false if the file does not exist
  */
@@ -3041,7 +3041,7 @@ function wfWaitForSlaves(
 	$ifWritesSince = null, $wiki = false, $cluster = false, $timeout = null
 ) {
 	if ( $timeout === null ) {
-		$timeout = ( PHP_SAPI === 'cli' ) ? 86400 : 10;
+		$timeout = wfIsCLI() ? 86400 : 10;
 	}
 
 	if ( $cluster === '*' ) {

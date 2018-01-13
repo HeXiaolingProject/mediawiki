@@ -394,7 +394,9 @@ abstract class Database implements IDatabase, IMaintainableDatabase, LoggerAware
 			$p['variables'] = isset( $p['variables'] ) ? $p['variables'] : [];
 			$p['tablePrefix'] = isset( $p['tablePrefix'] ) ? $p['tablePrefix'] : '';
 			$p['schema'] = isset( $p['schema'] ) ? $p['schema'] : '';
-			$p['cliMode'] = isset( $p['cliMode'] ) ? $p['cliMode'] : ( PHP_SAPI === 'cli' );
+			$p['cliMode'] = isset( $p['cliMode'] )
+				? $p['cliMode']
+				: ( PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg' );
 			$p['agent'] = isset( $p['agent'] ) ? $p['agent'] : '';
 			if ( !isset( $p['connLogger'] ) ) {
 				$p['connLogger'] = new \Psr\Log\NullLogger();
@@ -3390,6 +3392,12 @@ abstract class Database implements IDatabase, IMaintainableDatabase, LoggerAware
 		$fname = __METHOD__,
 		callable $inputCallback = null
 	) {
+		$delimiterReset = new ScopedCallback(
+			function ( $delimiter ) {
+				$this->delimiter = $delimiter;
+			},
+			[ $this->delimiter ]
+		);
 		$cmd = '';
 
 		while ( !feof( $fp ) ) {
@@ -3418,7 +3426,15 @@ abstract class Database implements IDatabase, IMaintainableDatabase, LoggerAware
 			if ( $done || feof( $fp ) ) {
 				$cmd = $this->replaceVars( $cmd );
 
-				if ( !$inputCallback || call_user_func( $inputCallback, $cmd ) ) {
+				if ( $inputCallback ) {
+					$callbackResult = call_user_func( $inputCallback, $cmd );
+
+					if ( is_string( $callbackResult ) || !$callbackResult ) {
+						$cmd = $callbackResult;
+					}
+				}
+
+				if ( $cmd ) {
 					$res = $this->query( $cmd, $fname );
 
 					if ( $resultCallback ) {
@@ -3435,6 +3451,7 @@ abstract class Database implements IDatabase, IMaintainableDatabase, LoggerAware
 			}
 		}
 
+		ScopedCallback::consume( $delimiterReset );
 		return true;
 	}
 
