@@ -1,5 +1,7 @@
 <?php
 
+use MediaWiki\MediaWikiServices;
+
 /**
  * @group Database
  * @group Title
@@ -163,7 +165,7 @@ class TitleTest extends MediaWikiTestCase {
 	 */
 	public function testSecureAndSplitValid( $text ) {
 		$this->secureAndSplitGlobals();
-		$this->assertInstanceOf( 'Title', Title::newFromText( $text ), "Valid: $text" );
+		$this->assertInstanceOf( Title::class, Title::newFromText( $text ), "Valid: $text" );
 	}
 
 	/**
@@ -434,7 +436,7 @@ class TitleTest extends MediaWikiTestCase {
 		$this->setContentLang( $contLang );
 
 		$title = Title::newFromText( $titleText );
-		$this->assertInstanceOf( 'Title', $title,
+		$this->assertInstanceOf( Title::class, $title,
 			"Test must be passed a valid title text, you gave '$titleText'"
 		);
 		$this->assertEquals( $expected,
@@ -674,7 +676,7 @@ class TitleTest extends MediaWikiTestCase {
 	 */
 	public function testExists() {
 		$title = Title::makeTitle( NS_PROJECT, 'New page' );
-		$linkCache = LinkCache::singleton();
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
 
 		$article = new Article( $title );
 		$page = $article->getPage();

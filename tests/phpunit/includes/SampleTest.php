@@ -1,5 +1,8 @@
 <?php
 
+/**
+ * @coversNothing Just a sample
+ */
 class SampleTest extends MediaWikiLangTestCase {
 
 	/**
@@ -36,7 +39,7 @@ class SampleTest extends MediaWikiLangTestCase {
 	 */
 	public function testTitleObjectStringConversion() {
 		$title = Title::newFromText( "text" );
-		$this->assertInstanceOf( 'Title', $title, "Title creation" );
+		$this->assertInstanceOf( Title::class, $title, "Title creation" );
 		$this->assertEquals( "Text", $title, "Automatic string conversion" );
 
 		$title = Title::newFromText( "text", NS_MEDIA );

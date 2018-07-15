@@ -33,14 +33,25 @@ use Wikimedia\ScopedCallback;
 use Wikimedia\WaitConditionLoop;
 
 /**
- * interface is intended to be more or less compatible with
- * the PHP memcached client.
+ * Class representing a cache/ephemeral data store
  *
- * backends for local hash array and SQL table included:
- * @code
- *   $bag = new HashBagOStuff();
- *   $bag = new SqlBagOStuff(); # connect to db first
- * @endcode
+ * This interface is intended to be more or less compatible with the PHP memcached client.
+ *
+ * Instances of this class should be created with an intended access scope, such as:
+ *   - a) A single PHP thread on a server (e.g. stored in a PHP variable)
+ *   - b) A single application server (e.g. stored in APC or sqlite)
+ *   - c) All application servers in datacenter (e.g. stored in memcached or mysql)
+ *   - d) All application servers in all datacenters (e.g. stored via mcrouter or dynomite)
+ *
+ * Callers should use the proper factory methods that yield BagOStuff instances. Site admins
+ * should make sure the configuration for those factory methods matches their access scope.
+ * BagOStuff subclasses have widely varying levels of support for replication features.
+ *
+ * For any given instance, methods like lock(), unlock(), merge(), and set() with WRITE_SYNC
+ * should semantically operate over its entire access scope; any nodes/threads in that scope
+ * should serialize appropriately when using them. Likewise, a call to get() with READ_LATEST
+ * from one node in its access scope should reflect the prior changes of any other node its access
+ * scope. Any get() should reflect the changes of any prior set() with WRITE_SYNC.
  *
  * @ingroup Cache
  */
@@ -69,6 +80,9 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 
 	/** @var callable[] */
 	protected $busyCallbacks = [];
+
+	/** @var float|null */
+	private $wallClockOverride;
 
 	/** @var int[] Map of (ATTR_* class constant => QOS_* class constant) */
 	protected $attrMap = [];
@@ -108,15 +122,13 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 			$this->keyspace = $params['keyspace'];
 		}
 
-		$this->asyncHandler = isset( $params['asyncHandler'] )
-			? $params['asyncHandler']
-			: null;
+		$this->asyncHandler = $params['asyncHandler'] ?? null;
 
 		if ( !empty( $params['reportDupes'] ) && is_callable( $this->asyncHandler ) ) {
 			$this->reportDupes = true;
 		}
 
-		$this->syncTimeout = isset( $params['syncTimeout'] ) ? $params['syncTimeout'] : 3;
+		$this->syncTimeout = $params['syncTimeout'] ?? 3;
 	}
 
 	/**
@@ -165,7 +177,7 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	/**
 	 * Get an item with the given key
 	 *
-	 * If the key includes a determistic input hash (e.g. the key can only have
+	 * If the key includes a deterministic input hash (e.g. the key can only have
 	 * the correct value) or complete staleness checks are handled by the caller
 	 * (e.g. nothing relies on the TTL), then the READ_VERIFIED flag should be set.
 	 * This lets tiered backends know they can safely upgrade a cached value to
@@ -173,7 +185,7 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	 *
 	 * @param string $key
 	 * @param int $flags Bitfield of BagOStuff::READ_* constants [optional]
-	 * @param int $oldFlags [unused]
+	 * @param int|null $oldFlags [unused]
 	 * @return mixed Returns false on failure and if the item does not exist
 	 */
 	public function get( $key, $flags = 0, $oldFlags = null ) {
@@ -331,7 +343,21 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	 * @throws Exception
 	 */
 	protected function cas( $casToken, $key, $value, $exptime = 0 ) {
-		throw new Exception( "CAS is not implemented in " . __CLASS__ );
+		if ( !$this->lock( $key, 0 ) ) {
+			return false; // non-blocking
+		}
+
+		$curCasToken = null; // passed by reference
+		$this->getWithToken( $key, $curCasToken, self::READ_LATEST );
+		if ( $casToken === $curCasToken ) {
+			$success = $this->set( $key, $value, $exptime );
+		} else {
+			$success = false; // mismatched or failed
+		}
+
+		$this->unlock( $key );
+
+		return $success;
 	}
 
 	/**
@@ -473,11 +499,11 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 			return null;
 		}
 
-		$lSince = microtime( true ); // lock timestamp
+		$lSince = $this->getCurrentTime(); // lock timestamp
 
 		return new ScopedCallback( function () use ( $key, $lSince, $expiry ) {
 			$latency = 0.050; // latency skew (err towards keeping lock present)
-			$age = ( microtime( true ) - $lSince + $latency );
+			$age = ( $this->getCurrentTime() - $lSince + $latency );
 			if ( ( $age + $latency ) >= $expiry ) {
 				$this->logger->warning( "Lock for $key held too long ($age sec)." );
 				return; // expired; it's not "safe" to delete the key
@@ -691,7 +717,7 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	 */
 	protected function convertExpiry( $exptime ) {
 		if ( $exptime != 0 && $exptime < ( 10 * self::TTL_YEAR ) ) {
-			return time() + $exptime;
+			return (int)$this->getCurrentTime() + $exptime;
 		} else {
 			return $exptime;
 		}
@@ -706,7 +732,7 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	 */
 	protected function convertToRelative( $exptime ) {
 		if ( $exptime >= ( 10 * self::TTL_YEAR ) ) {
-			$exptime -= time();
+			$exptime -= (int)$this->getCurrentTime();
 			if ( $exptime <= 0 ) {
 				$exptime = 1;
 			}
@@ -748,7 +774,7 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	 *
 	 * @since 1.27
 	 * @param string $class Key class
-	 * @param string $component [optional] Key component (starting with a key collection name)
+	 * @param string|null $component [optional] Key component (starting with a key collection name)
 	 * @return string Colon-delimited list of $keyspace followed by escaped components of $args
 	 */
 	public function makeGlobalKey( $class, $component = null ) {
@@ -760,7 +786,7 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	 *
 	 * @since 1.27
 	 * @param string $class Key class
-	 * @param string $component [optional] Key component (starting with a key collection name)
+	 * @param string|null $component [optional] Key component (starting with a key collection name)
 	 * @return string Colon-delimited list of $keyspace followed by escaped components of $args
 	 */
 	public function makeKey( $class, $component = null ) {
@@ -773,7 +799,7 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 	 * @since 1.28
 	 */
 	public function getQoS( $flag ) {
-		return isset( $this->attrMap[$flag] ) ? $this->attrMap[$flag] : self::QOS_UNKNOWN;
+		return $this->attrMap[$flag] ?? self::QOS_UNKNOWN;
 	}
 
 	/**
@@ -795,5 +821,21 @@ abstract class BagOStuff implements IExpiringStore, LoggerAwareInterface {
 		}
 
 		return $map;
+	}
+
+	/**
+	 * @return float UNIX timestamp
+	 * @codeCoverageIgnore
+	 */
+	protected function getCurrentTime() {
+		return $this->wallClockOverride ?: microtime( true );
+	}
+
+	/**
+	 * @param float|null &$time Mock UNIX timestamp for testing
+	 * @codeCoverageIgnore
+	 */
+	public function setMockTime( &$time ) {
+		$this->wallClockOverride =& $time;
 	}
 }

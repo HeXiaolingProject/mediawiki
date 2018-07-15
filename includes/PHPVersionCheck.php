@@ -1,5 +1,4 @@
 <?php
-// phpcs:ignoreFile Generic.Arrays.DisallowLongArraySyntax,MediaWiki.Usage.DirUsage.FunctionFound
 /**
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +18,7 @@
  * @file
  */
 
+// phpcs:disable Generic.Arrays.DisallowLongArraySyntax,PSR2.Classes.PropertyDeclaration,MediaWiki.Usage.DirUsage
 /**
  * Check PHP Version, as well as for composer dependencies in entry points,
  * and display something vaguely comprehensible in the event of a totally
@@ -27,10 +27,10 @@
  */
 class PHPVersionCheck {
 	/* @var string The number of the MediaWiki version used */
-	var $mwVersion = '1.31';
+	var $mwVersion = '1.32';
 	var $functionsExtensionsMapping = array(
 		'mb_substr'   => 'mbstring',
-		'utf8_encode' => 'xml',
+		'xml_parser_create' => 'xml',
 		'ctype_digit' => 'ctype',
 		'json_decode' => 'json',
 		'iconv'       => 'iconv',
@@ -54,7 +54,6 @@ class PHPVersionCheck {
 	 *   - api.php
 	 *   - mw-config/index.php
 	 *   - cli
-	 * @return $this
 	 */
 	function setEntryPoint( $entryPoint ) {
 		$this->entryPoint = $entryPoint;
@@ -94,16 +93,14 @@ class PHPVersionCheck {
 			'implementation' => 'PHP',
 			'version' => PHP_VERSION,
 			'vendor' => 'the PHP Group',
-			'upstreamSupported' => '5.5.0',
-			'minSupported' => '5.5.9',
+			'upstreamSupported' => '5.6.0',
+			'minSupported' => '7.0.0',
 			'upgradeURL' => 'https://secure.php.net/downloads.php',
 		);
 	}
 
 	/**
 	 * Displays an error, if the installed php version does not meet the minimum requirement.
-	 *
-	 * @return $this
 	 */
 	function checkRequiredPHPVersion() {
 		$phpInfo = $this->getPHPInfo();
@@ -118,28 +115,29 @@ class PHPVersionCheck {
 				. "{$otherInfo['minSupported']}, you are using {$phpInfo['implementation']} "
 				. "{$phpInfo['version']}.";
 
-			$longText = "Error: You might be using an older {$phpInfo['implementation']} version. \n"
+			$longText = "Error: You might be using an older {$phpInfo['implementation']} version "
+				. "({$phpInfo['implementation']} {$phpInfo['version']}). \n"
 				. "MediaWiki $this->mwVersion needs {$phpInfo['implementation']}"
 				. " $minimumVersion or higher or {$otherInfo['implementation']} version "
 				. "{$otherInfo['minSupported']}.\n\nCheck if you have a"
-				. " newer php executable with a different name, such as php5.\n\n";
+				. " newer php executable with a different name.\n\n";
 
-			// phpcs:ignore Generic.Files.LineLength
+			// phpcs:disable Generic.Files.LineLength
 			$longHtml = <<<HTML
 			Please consider <a href="{$phpInfo['upgradeURL']}">upgrading your copy of
 			{$phpInfo['implementation']}</a>.
-			{$phpInfo['implementation']} versions less than {$phpInfo['upstreamSupported']} are no 
+			{$phpInfo['implementation']} versions less than {$phpInfo['upstreamSupported']} are no
 			longer supported by {$phpInfo['vendor']} and will not receive
 			security or bugfix updates.
 		</p>
 		<p>
 			If for some reason you are unable to upgrade your {$phpInfo['implementation']} version,
-			you will need to <a href="https://www.mediawiki.org/wiki/Download">download</a> an 
+			you will need to <a href="https://www.mediawiki.org/wiki/Download">download</a> an
 			older version of MediaWiki from our website.
-			See our<a href="https://www.mediawiki.org/wiki/Compatibility#PHP">compatibility page</a>
+			See our <a href="https://www.mediawiki.org/wiki/Compatibility#PHP">compatibility page</a>
 			for details of which versions are compatible with prior versions of {$phpInfo['implementation']}.
 HTML;
-			// phpcs:enable
+			// phpcs:enable Generic.Files.LineLength
 			$this->triggerError(
 				"Supported {$phpInfo['implementation']} versions",
 				$shortText,
@@ -151,8 +149,6 @@ HTML;
 
 	/**
 	 * Displays an error, if the vendor/autoload.php file could not be found.
-	 *
-	 * @return $this
 	 */
 	function checkVendorExistence() {
 		if ( !file_exists( dirname( __FILE__ ) . '/../vendor/autoload.php' ) ) {
@@ -164,14 +160,14 @@ HTML;
 				. "https://www.mediawiki.org/wiki/Download_from_Git#Fetch_external_libraries\n"
 				. "for help on installing the required components.";
 
-			// phpcs:ignore Generic.Files.LineLength
+			// phpcs:disable Generic.Files.LineLength
 			$longHtml = <<<HTML
 		MediaWiki now also has some external dependencies that need to be installed via
 		composer or from a separate git repo. Please see
 		<a href="https://www.mediawiki.org/wiki/Download_from_Git#Fetch_external_libraries">mediawiki.org</a>
 		for help on installing the required components.
 HTML;
-			// phpcs:enable
+			// phpcs:enable Generic.Files.LineLength
 
 			$this->triggerError( 'External dependencies', $shortText, $longText, $longHtml );
 		}
@@ -179,8 +175,6 @@ HTML;
 
 	/**
 	 * Displays an error, if a PHP extension does not exist.
-	 *
-	 * @return $this
 	 */
 	function checkExtensionExistence() {
 		$missingExtensions = array();

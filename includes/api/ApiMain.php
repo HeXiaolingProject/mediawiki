@@ -1,7 +1,5 @@
 <?php
 /**
- * Created on Sep 4, 2006
- *
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -57,72 +55,72 @@ class ApiMain extends ApiBase {
 	 * List of available modules: action name => module class
 	 */
 	private static $Modules = [
-		'login' => 'ApiLogin',
-		'clientlogin' => 'ApiClientLogin',
-		'logout' => 'ApiLogout',
-		'createaccount' => 'ApiAMCreateAccount',
-		'linkaccount' => 'ApiLinkAccount',
-		'unlinkaccount' => 'ApiRemoveAuthenticationData',
-		'changeauthenticationdata' => 'ApiChangeAuthenticationData',
-		'removeauthenticationdata' => 'ApiRemoveAuthenticationData',
-		'resetpassword' => 'ApiResetPassword',
-		'query' => 'ApiQuery',
-		'expandtemplates' => 'ApiExpandTemplates',
-		'parse' => 'ApiParse',
-		'stashedit' => 'ApiStashEdit',
-		'opensearch' => 'ApiOpenSearch',
-		'feedcontributions' => 'ApiFeedContributions',
-		'feedrecentchanges' => 'ApiFeedRecentChanges',
-		'feedwatchlist' => 'ApiFeedWatchlist',
-		'help' => 'ApiHelp',
-		'paraminfo' => 'ApiParamInfo',
-		'rsd' => 'ApiRsd',
-		'compare' => 'ApiComparePages',
-		'tokens' => 'ApiTokens',
-		'checktoken' => 'ApiCheckToken',
-		'cspreport' => 'ApiCSPReport',
-		'validatepassword' => 'ApiValidatePassword',
+		'login' => ApiLogin::class,
+		'clientlogin' => ApiClientLogin::class,
+		'logout' => ApiLogout::class,
+		'createaccount' => ApiAMCreateAccount::class,
+		'linkaccount' => ApiLinkAccount::class,
+		'unlinkaccount' => ApiRemoveAuthenticationData::class,
+		'changeauthenticationdata' => ApiChangeAuthenticationData::class,
+		'removeauthenticationdata' => ApiRemoveAuthenticationData::class,
+		'resetpassword' => ApiResetPassword::class,
+		'query' => ApiQuery::class,
+		'expandtemplates' => ApiExpandTemplates::class,
+		'parse' => ApiParse::class,
+		'stashedit' => ApiStashEdit::class,
+		'opensearch' => ApiOpenSearch::class,
+		'feedcontributions' => ApiFeedContributions::class,
+		'feedrecentchanges' => ApiFeedRecentChanges::class,
+		'feedwatchlist' => ApiFeedWatchlist::class,
+		'help' => ApiHelp::class,
+		'paraminfo' => ApiParamInfo::class,
+		'rsd' => ApiRsd::class,
+		'compare' => ApiComparePages::class,
+		'tokens' => ApiTokens::class,
+		'checktoken' => ApiCheckToken::class,
+		'cspreport' => ApiCSPReport::class,
+		'validatepassword' => ApiValidatePassword::class,
 
 		// Write modules
-		'purge' => 'ApiPurge',
-		'setnotificationtimestamp' => 'ApiSetNotificationTimestamp',
-		'rollback' => 'ApiRollback',
-		'delete' => 'ApiDelete',
-		'undelete' => 'ApiUndelete',
-		'protect' => 'ApiProtect',
-		'block' => 'ApiBlock',
-		'unblock' => 'ApiUnblock',
-		'move' => 'ApiMove',
-		'edit' => 'ApiEditPage',
-		'upload' => 'ApiUpload',
-		'filerevert' => 'ApiFileRevert',
-		'emailuser' => 'ApiEmailUser',
-		'watch' => 'ApiWatch',
-		'patrol' => 'ApiPatrol',
-		'import' => 'ApiImport',
-		'clearhasmsg' => 'ApiClearHasMsg',
-		'userrights' => 'ApiUserrights',
-		'options' => 'ApiOptions',
-		'imagerotate' => 'ApiImageRotate',
-		'revisiondelete' => 'ApiRevisionDelete',
-		'managetags' => 'ApiManageTags',
-		'tag' => 'ApiTag',
-		'mergehistory' => 'ApiMergeHistory',
-		'setpagelanguage' => 'ApiSetPageLanguage',
+		'purge' => ApiPurge::class,
+		'setnotificationtimestamp' => ApiSetNotificationTimestamp::class,
+		'rollback' => ApiRollback::class,
+		'delete' => ApiDelete::class,
+		'undelete' => ApiUndelete::class,
+		'protect' => ApiProtect::class,
+		'block' => ApiBlock::class,
+		'unblock' => ApiUnblock::class,
+		'move' => ApiMove::class,
+		'edit' => ApiEditPage::class,
+		'upload' => ApiUpload::class,
+		'filerevert' => ApiFileRevert::class,
+		'emailuser' => ApiEmailUser::class,
+		'watch' => ApiWatch::class,
+		'patrol' => ApiPatrol::class,
+		'import' => ApiImport::class,
+		'clearhasmsg' => ApiClearHasMsg::class,
+		'userrights' => ApiUserrights::class,
+		'options' => ApiOptions::class,
+		'imagerotate' => ApiImageRotate::class,
+		'revisiondelete' => ApiRevisionDelete::class,
+		'managetags' => ApiManageTags::class,
+		'tag' => ApiTag::class,
+		'mergehistory' => ApiMergeHistory::class,
+		'setpagelanguage' => ApiSetPageLanguage::class,
 	];
 
 	/**
 	 * List of available formats: format name => format class
 	 */
 	private static $Formats = [
-		'json' => 'ApiFormatJson',
-		'jsonfm' => 'ApiFormatJson',
-		'php' => 'ApiFormatPhp',
-		'phpfm' => 'ApiFormatPhp',
-		'xml' => 'ApiFormatXml',
-		'xmlfm' => 'ApiFormatXml',
-		'rawfm' => 'ApiFormatJson',
-		'none' => 'ApiFormatNone',
+		'json' => ApiFormatJson::class,
+		'jsonfm' => ApiFormatJson::class,
+		'php' => ApiFormatPhp::class,
+		'phpfm' => ApiFormatPhp::class,
+		'xml' => ApiFormatXml::class,
+		'xmlfm' => ApiFormatXml::class,
+		'rawfm' => ApiFormatJson::class,
+		'none' => ApiFormatNone::class,
 	];
 
 	/**
@@ -167,7 +165,7 @@ class ApiMain extends ApiBase {
 	/**
 	 * Constructs an instance of ApiMain that utilizes the module and format specified by $request.
 	 *
-	 * @param IContextSource|WebRequest $context If this is an instance of
+	 * @param IContextSource|WebRequest|null $context If this is an instance of
 	 *    FauxRequest, errors are thrown and no printing occurs
 	 * @param bool $enableWrite Should be set to true if the api may modify data
 	 */
@@ -370,19 +368,12 @@ class ApiMain extends ApiBase {
 	 * Set the continuation manager
 	 * @param ApiContinuationManager|null $manager
 	 */
-	public function setContinuationManager( $manager ) {
-		if ( $manager !== null ) {
-			if ( !$manager instanceof ApiContinuationManager ) {
-				throw new InvalidArgumentException( __METHOD__ . ': Was passed ' .
-					is_object( $manager ) ? get_class( $manager ) : gettype( $manager )
-				);
-			}
-			if ( $this->mContinuationManager !== null ) {
-				throw new UnexpectedValueException(
-					__METHOD__ . ': tried to set manager from ' . $manager->getSource() .
-					' when a manager is already set from ' . $this->mContinuationManager->getSource()
-				);
-			}
+	public function setContinuationManager( ApiContinuationManager $manager = null ) {
+		if ( $manager !== null && $this->mContinuationManager !== null ) {
+			throw new UnexpectedValueException(
+				__METHOD__ . ': tried to set manager from ' . $manager->getSource() .
+				' when a manager is already set from ' . $this->mContinuationManager->getSource()
+			);
 		}
 		$this->mContinuationManager = $manager;
 	}
@@ -595,7 +586,7 @@ class ApiMain extends ApiBase {
 		$this->setCacheMode( 'private' );
 
 		$response = $this->getRequest()->response();
-		$headerStr = 'MediaWiki-API-Error: ' . join( ', ', $errCodes );
+		$headerStr = 'MediaWiki-API-Error: ' . implode( ', ', $errCodes );
 		$response->header( $headerStr );
 
 		// Reset and print just the error message
@@ -1039,7 +1030,7 @@ class ApiMain extends ApiBase {
 			// None of the rest have any messages for non-error types
 		} elseif ( $e instanceof UsageException ) {
 			// User entered incorrect parameters - generate error response
-			$data = MediaWiki\quietCall( [ $e, 'getMessageArray' ] );
+			$data = Wikimedia\quietCall( [ $e, 'getMessageArray' ] );
 			$code = $data['code'];
 			$info = $data['info'];
 			unset( $data['code'], $data['info'] );
@@ -1201,9 +1192,12 @@ class ApiMain extends ApiBase {
 		// Instantiate the module requested by the user
 		$module = $this->mModuleMgr->getModule( $this->mAction, 'action' );
 		if ( $module === null ) {
+			// Probably can't happen
+			// @codeCoverageIgnoreStart
 			$this->dieWithError(
 				[ 'apierror-unknownaction', wfEscapeWikiText( $this->mAction ) ], 'unknown_action'
 			);
+			// @codeCoverageIgnoreEnd
 		}
 		$moduleParams = $module->extractRequestParams();
 
@@ -1222,7 +1216,10 @@ class ApiMain extends ApiBase {
 			}
 
 			if ( !isset( $moduleParams['token'] ) ) {
+				// Probably can't happen
+				// @codeCoverageIgnoreStart
 				$module->dieWithError( [ 'apierror-missingparam', 'token' ] );
+				// @codeCoverageIgnoreEnd
 			}
 
 			$module->requirePostedParameters( [ 'token' ] );
@@ -1260,6 +1257,8 @@ class ApiMain extends ApiBase {
 				];
 			}
 		}
+
+		Hooks::runWithoutAbort( 'ApiMaxLagInfo', [ &$lagInfo ] );
 
 		return $lagInfo;
 	}
@@ -1399,9 +1398,9 @@ class ApiMain extends ApiBase {
 			$this->getRequest()->response()->statusHeader( 304 );
 
 			// Avoid outputting the compressed representation of a zero-length body
-			MediaWiki\suppressWarnings();
+			Wikimedia\suppressWarnings();
 			ini_set( 'zlib.output_compression', 0 );
-			MediaWiki\restoreWarnings();
+			Wikimedia\restoreWarnings();
 			wfClearOutputBuffers();
 
 			return false;
@@ -1435,7 +1434,7 @@ class ApiMain extends ApiBase {
 		}
 
 		// Allow extensions to stop execution for arbitrary reasons.
-		$message = false;
+		$message = 'hookaborted';
 		if ( !Hooks::run( 'ApiCheckCanExecute', [ $module, $user, &$message ] ) ) {
 			$this->dieWithError( $message );
 		}
@@ -1452,7 +1451,7 @@ class ApiMain extends ApiBase {
 
 		if ( $module->isWriteMode()
 			&& $this->getUser()->isBot()
-			&& wfGetLB()->getServerCount() > 1
+			&& MediaWikiServices::getInstance()->getDBLoadBalancer()->getServerCount() > 1
 		) {
 			$this->checkBotReadOnly();
 		}
@@ -1466,7 +1465,7 @@ class ApiMain extends ApiBase {
 		$numLagged = 0;
 		$lagLimit = $this->getConfig()->get( 'APIMaxLagThreshold' );
 		$laggedServers = [];
-		$loadBalancer = wfGetLB();
+		$loadBalancer = MediaWikiServices::getInstance()->getDBLoadBalancer();
 		foreach ( $loadBalancer->getLagTimes() as $serverIndex => $lag ) {
 			if ( $lag > $lagLimit ) {
 				++$numLagged;
@@ -1475,7 +1474,7 @@ class ApiMain extends ApiBase {
 		}
 
 		// If a majority of replica DBs are too lagged then disallow writes
-		$replicaCount = wfGetLB()->getServerCount() - 1;
+		$replicaCount = $loadBalancer->getServerCount() - 1;
 		if ( $numLagged >= ceil( $replicaCount / 2 ) ) {
 			$laggedServers = implode( ', ', $laggedServers );
 			wfDebugLog(
@@ -1555,6 +1554,11 @@ class ApiMain extends ApiBase {
 	 */
 	protected function executeAction() {
 		$params = $this->setupExecuteAction();
+
+		// Check asserts early so e.g. errors in parsing a module's parameters due to being
+		// logged out don't override the client's intended "am I logged in?" check.
+		$this->checkAsserts( $params );
+
 		$module = $this->setupModule();
 		$this->mModule = $module;
 
@@ -1575,8 +1579,6 @@ class ApiMain extends ApiBase {
 		if ( !$this->mInternalMode ) {
 			$this->setupExternalResponse( $module, $params );
 		}
-
-		$this->checkAsserts( $params );
 
 		// Execute
 		$module->execute();
@@ -1614,7 +1616,7 @@ class ApiMain extends ApiBase {
 	/**
 	 * Log the preceding request
 	 * @param float $time Time in seconds
-	 * @param Exception $e Exception caught while processing the request
+	 * @param Exception|null $e Exception caught while processing the request
 	 */
 	protected function logRequest( $time, $e = null ) {
 		$request = $this->getRequest();
@@ -1722,8 +1724,8 @@ class ApiMain extends ApiBase {
 	/**
 	 * Get a request value, and register the fact that it was used, for logging.
 	 * @param string $name
-	 * @param mixed $default
-	 * @return mixed
+	 * @param string|null $default
+	 * @return string|null
 	 */
 	public function getVal( $name, $default = null ) {
 		$this->mParamsUsed[$name] = true;
@@ -1891,6 +1893,7 @@ class ApiMain extends ApiBase {
 			$help[$k] = $v;
 		}
 		$help['datatypes'] = '';
+		$help['templatedparams'] = '';
 		$help['credits'] = '';
 
 		// Fill 'permissions'
@@ -1923,7 +1926,7 @@ class ApiMain extends ApiBase {
 		$help['permissions'] .= Html::closeElement( 'dl' );
 		$help['permissions'] .= Html::closeElement( 'div' );
 
-		// Fill 'datatypes' and 'credits', if applicable
+		// Fill 'datatypes', 'templatedparams', and 'credits', if applicable
 		if ( empty( $options['nolead'] ) ) {
 			$level = $options['headerlevel'];
 			$tocnumber = &$options['tocnumber'];
@@ -1951,6 +1954,35 @@ class ApiMain extends ApiBase {
 					'toclevel' => count( $tocnumber ),
 					'level' => $level,
 					'anchor' => 'main/datatypes',
+					'line' => $header,
+					'number' => implode( '.', $tocnumber ),
+					'index' => false,
+				];
+			}
+
+			$header = $this->msg( 'api-help-templatedparams-header' )->parse();
+
+			$id = Sanitizer::escapeIdForAttribute( 'main/templatedparams', Sanitizer::ID_PRIMARY );
+			$idFallback = Sanitizer::escapeIdForAttribute( 'main/templatedparams', Sanitizer::ID_FALLBACK );
+			$headline = Linker::makeHeadline( min( 6, $level ),
+				' class="apihelp-header">',
+				$id,
+				$header,
+				'',
+				$idFallback
+			);
+			// Ensure we have a sane anchor
+			if ( $id !== 'main/templatedparams' && $idFallback !== 'main/templatedparams' ) {
+				$headline = '<div id="main/templatedparams"></div>' . $headline;
+			}
+			$help['templatedparams'] .= $headline;
+			$help['templatedparams'] .= $this->msg( 'api-help-templatedparams' )->parseAsBlock();
+			if ( !isset( $tocData['main/templatedparams'] ) ) {
+				$tocnumber[$level]++;
+				$tocData['main/templatedparams'] = [
+					'toclevel' => count( $tocnumber ),
+					'level' => $level,
+					'anchor' => 'main/templatedparams',
 					'line' => $header,
 					'number' => implode( '.', $tocnumber ),
 					'index' => false,

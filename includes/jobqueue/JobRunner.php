@@ -69,7 +69,7 @@ class JobRunner implements LoggerAwareInterface {
 	}
 
 	/**
-	 * @param LoggerInterface $logger
+	 * @param LoggerInterface|null $logger
 	 */
 	public function __construct( LoggerInterface $logger = null ) {
 		if ( $logger === null ) {
@@ -109,9 +109,9 @@ class JobRunner implements LoggerAwareInterface {
 
 		$response = [ 'jobs' => [], 'reached' => 'none-ready' ];
 
-		$type = isset( $options['type'] ) ? $options['type'] : false;
-		$maxJobs = isset( $options['maxJobs'] ) ? $options['maxJobs'] : false;
-		$maxTime = isset( $options['maxTime'] ) ? $options['maxTime'] : false;
+		$type = $options['type'] ?? false;
+		$maxJobs = $options['maxJobs'] ?? false;
+		$maxTime = $options['maxTime'] ?? false;
 		$noThrottle = isset( $options['throttle'] ) && !$options['throttle'];
 
 		// Bail if job type is invalid
@@ -290,7 +290,9 @@ class JobRunner implements LoggerAwareInterface {
 		$jobStartTime = microtime( true );
 		try {
 			$fnameTrxOwner = get_class( $job ) . '::run'; // give run() outer scope
-			$lbFactory->beginMasterChanges( $fnameTrxOwner );
+			if ( !$job->hasExecutionFlag( $job::JOB_NO_EXPLICIT_TRX_ROUND ) ) {
+				$lbFactory->beginMasterChanges( $fnameTrxOwner );
+			}
 			$status = $job->run();
 			$error = $job->getLastError();
 			$this->commitMasterChanges( $lbFactory, $job, $fnameTrxOwner );

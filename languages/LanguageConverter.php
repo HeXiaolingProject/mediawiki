@@ -163,6 +163,8 @@ class LanguageConverter {
 
 		$req = $this->getURLVariant();
 
+		Hooks::run( 'GetLangPreferredVariant', [ &$req ] );
+
 		if ( $wgUser->isSafeToLoad() && $wgUser->isLoggedIn() && !$req ) {
 			$req = $this->getUserVariant();
 		} elseif ( !$req ) {
@@ -173,11 +175,13 @@ class LanguageConverter {
 			$req = $this->validateVariant( $wgDefaultLanguageVariant );
 		}
 
+		$req = $this->validateVariant( $req );
+
 		// This function, unlike the other get*Variant functions, is
 		// not memoized (i.e. there return value is not cached) since
 		// new information might appear during processing after this
 		// is first called.
-		if ( $this->validateVariant( $req ) ) {
+		if ( $req ) {
 			return $req;
 		}
 		return $this->mMainLanguageCode;
@@ -209,12 +213,28 @@ class LanguageConverter {
 
 	/**
 	 * Validate the variant
-	 * @param string $variant The variant to validate
+	 * @param string|null $variant The variant to validate
 	 * @return mixed Returns the variant if it is valid, null otherwise
 	 */
 	public function validateVariant( $variant = null ) {
-		if ( $variant !== null && in_array( $variant, $this->mVariants ) ) {
+		if ( $variant === null ) {
+			return null;
+		}
+		// Our internal variants are always lower-case; the variant we
+		// are validating may have mixed case.
+		$variant = LanguageCode::replaceDeprecatedCodes( strtolower( $variant ) );
+		if ( in_array( $variant, $this->mVariants ) ) {
 			return $variant;
+		}
+		// Browsers are supposed to use BCP 47 standard in the
+		// Accept-Language header, but not all of our internal
+		// mediawiki variant codes are BCP 47.  Map BCP 47 code
+		// to our internal code.
+		foreach ( $this->mVariants as $v ) {
+			// Case-insensitive match (BCP 47 is mixed case)
+			if ( strtolower( LanguageCode::bcp47( $v ) ) === $variant ) {
+				return $v;
+			}
 		}
 		return null;
 	}
@@ -222,7 +242,7 @@ class LanguageConverter {
 	/**
 	 * Get the variant specified in the URL
 	 *
-	 * @return mixed Variant if one found, false otherwise.
+	 * @return mixed Variant if one found, null otherwise
 	 */
 	public function getURLVariant() {
 		global $wgRequest;
@@ -245,7 +265,7 @@ class LanguageConverter {
 	/**
 	 * Determine if the user has a variant set.
 	 *
-	 * @return mixed Variant if one found, false otherwise.
+	 * @return mixed Variant if one found, null otherwise
 	 */
 	protected function getUserVariant() {
 		global $wgUser, $wgContLang;
@@ -282,7 +302,7 @@ class LanguageConverter {
 	/**
 	 * Determine the language variant from the Accept-Language header.
 	 *
-	 * @return mixed Variant if one found, false otherwise.
+	 * @return mixed Variant if one found, null otherwise
 	 */
 	protected function getHeaderVariant() {
 		global $wgRequest;
@@ -291,7 +311,7 @@ class LanguageConverter {
 			return $this->mHeaderVariant;
 		}
 
-		// see if some supported language variant is set in the
+		// See if some supported language variant is set in the
 		// HTTP header.
 		$languages = array_keys( $wgRequest->getAcceptLang() );
 		if ( empty( $languages ) ) {
@@ -543,17 +563,18 @@ class LanguageConverter {
 		$convTable = $convRule->getConvTable();
 		$action = $convRule->getRulesAction();
 		foreach ( $convTable as $variant => $pair ) {
-			if ( !$this->validateVariant( $variant ) ) {
+			$v = $this->validateVariant( $variant );
+			if ( !$v ) {
 				continue;
 			}
 
 			if ( $action == 'add' ) {
 				// More efficient than array_merge(), about 2.5 times.
 				foreach ( $pair as $from => $to ) {
-					$this->mTables[$variant]->setPair( $from, $to );
+					$this->mTables[$v]->setPair( $from, $to );
 				}
 			} elseif ( $action == 'remove' ) {
-				$this->mTables[$variant]->removeArray( $pair );
+				$this->mTables[$v]->removeArray( $pair );
 			}
 		}
 	}
@@ -965,11 +986,11 @@ class LanguageConverter {
 	 * Parse the conversion table stored in the cache.
 	 *
 	 * The tables should be in blocks of the following form:
-	 *		-{
-	 *			word => word ;
-	 *			word => word ;
-	 *			...
-	 *		}-
+	 * 		-{
+	 * 			word => word ;
+	 * 			word => word ;
+	 * 			...
+	 * 		}-
 	 *
 	 * To make the tables more manageable, subpages are allowed
 	 * and will be parsed recursively if $recursive == true.

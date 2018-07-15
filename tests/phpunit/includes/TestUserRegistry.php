@@ -62,9 +62,7 @@ class TestUserRegistry {
 		sort( $groups );
 		$key = implode( ',', $groups );
 
-		$testUser = isset( self::$testUsers[$key] )
-			? self::$testUsers[$key]
-			: false;
+		$testUser = self::$testUsers[$key] ?? false;
 
 		if ( !$testUser || !$testUser->getUser()->isLoggedIn() ) {
 			$id = self::getNextId();
@@ -106,5 +104,20 @@ class TestUserRegistry {
 	 */
 	public static function clear() {
 		self::$testUsers = [];
+	}
+
+	/**
+	 * @todo It would be nice if this were a non-static method of TestUser
+	 * instead, but that doesn't seem possible without friends?
+	 *
+	 * @return bool True if it's safe to modify the user
+	 */
+	public static function isMutable( User $user ) {
+		foreach ( self::$testUsers as $key => $testUser ) {
+			if ( $user === $testUser->getUser() ) {
+				return false;
+			}
+		}
+		return true;
 	}
 }

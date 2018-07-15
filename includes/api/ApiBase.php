@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Sep 5, 2006
- *
  * Copyright © 2006, 2010 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -229,6 +225,24 @@ abstract class ApiBase extends ContextSource {
 	 * @since 1.31
 	 */
 	const PARAM_MAX_CHARS = 24;
+
+	/**
+	 * (array) Indicate that this is a templated parameter, and specify replacements. Keys are the
+	 * placeholders in the parameter name and values are the names of (unprefixed) parameters from
+	 * which the replacement values are taken.
+	 *
+	 * For example, a parameter "foo-{ns}-{title}" could be defined with
+	 * PARAM_TEMPLATE_VARS => [ 'ns' => 'namespaces', 'title' => 'titles' ]. Then a query for
+	 * namespaces=0|1&titles=X|Y would support parameters foo-0-X, foo-0-Y, foo-1-X, and foo-1-Y.
+	 *
+	 * All placeholders must be present in the parameter's name. Each target parameter must have
+	 * PARAM_ISMULTI true. If a target is itself a templated parameter, its PARAM_TEMPLATE_VARS must
+	 * be a subset of the referring parameter's, mapping the same placeholders to the same targets.
+	 * A parameter cannot target itself.
+	 *
+	 * @since 1.32
+	 */
+	const PARAM_TEMPLATE_VARS = 25;
 
 	/**@}*/
 
@@ -696,7 +710,7 @@ abstract class ApiBase extends ContextSource {
 	 * Set the continuation manager
 	 * @param ApiContinuationManager|null $manager
 	 */
-	public function setContinuationManager( $manager ) {
+	public function setContinuationManager( ApiContinuationManager $manager = null ) {
 		// Main module has setContinuationManager() method overridden
 		// Safety - avoid infinite loop:
 		if ( $this->isMain() ) {
@@ -747,22 +761,115 @@ abstract class ApiBase extends ContextSource {
 	 * value - validated value from user or default. limits will not be
 	 * parsed if $parseLimit is set to false; use this when the max
 	 * limit is not definitive yet, e.g. when getting revisions.
-	 * @param bool $parseLimit True by default
+	 * @param bool|array $options If a boolean, uses that as the value for 'parseLimit'
+	 *  - parseLimit: (bool, default true) Whether to parse the 'max' value for limit types
+	 *  - safeMode: (bool, default false) If true, avoid throwing for parameter validation errors.
+	 *    Returned parameter values might be ApiUsageException instances.
 	 * @return array
 	 */
-	public function extractRequestParams( $parseLimit = true ) {
+	public function extractRequestParams( $options = [] ) {
+		if ( is_bool( $options ) ) {
+			$options = [ 'parseLimit' => $options ];
+		}
+		$options += [
+			'parseLimit' => true,
+			'safeMode' => false,
+		];
+
+		$parseLimit = (bool)$options['parseLimit'];
+
 		// Cache parameters, for performance and to avoid T26564.
 		if ( !isset( $this->mParamCache[$parseLimit] ) ) {
-			$params = $this->getFinalParams();
+			$params = $this->getFinalParams() ?: [];
 			$results = [];
+			$warned = [];
 
-			if ( $params ) { // getFinalParams() can return false
-				foreach ( $params as $paramName => $paramSettings ) {
-					$results[$paramName] = $this->getParameterFromSettings(
-						$paramName, $paramSettings, $parseLimit );
+			// Process all non-templates and save templates for secondary
+			// processing.
+			$toProcess = [];
+			foreach ( $params as $paramName => $paramSettings ) {
+				if ( isset( $paramSettings[self::PARAM_TEMPLATE_VARS] ) ) {
+					$toProcess[] = [ $paramName, $paramSettings[self::PARAM_TEMPLATE_VARS], $paramSettings ];
+				} else {
+					try {
+						$results[$paramName] = $this->getParameterFromSettings(
+							$paramName, $paramSettings, $parseLimit
+						);
+					} catch ( ApiUsageException $ex ) {
+						$results[$paramName] = $ex;
+					}
 				}
 			}
+
+			// Now process all the templates by successively replacing the
+			// placeholders with all client-supplied values.
+			// This bit duplicates JavaScript logic in
+			// ApiSandbox.PageLayout.prototype.updateTemplatedParams().
+			// If you update this, see if that needs updating too.
+			while ( $toProcess ) {
+				list( $name, $targets, $settings ) = array_shift( $toProcess );
+
+				foreach ( $targets as $placeholder => $target ) {
+					if ( !array_key_exists( $target, $results ) ) {
+						// The target wasn't processed yet, try the next one.
+						// If all hit this case, the parameter has no expansions.
+						continue;
+					}
+					if ( !is_array( $results[$target] ) || !$results[$target] ) {
+						// The target was processed but has no (valid) values.
+						// That means it has no expansions.
+						break;
+					}
+
+					// Expand this target in the name and all other targets,
+					// then requeue if there are more targets left or put in
+					// $results if all are done.
+					unset( $targets[$placeholder] );
+					$placeholder = '{' . $placeholder . '}';
+					foreach ( $results[$target] as $value ) {
+						if ( !preg_match( '/^[^{}]*$/', $value ) ) {
+							// Skip values that make invalid parameter names.
+							$encTargetName = $this->encodeParamName( $target );
+							if ( !isset( $warned[$encTargetName][$value] ) ) {
+								$warned[$encTargetName][$value] = true;
+								$this->addWarning( [
+									'apiwarn-ignoring-invalid-templated-value',
+									wfEscapeWikiText( $encTargetName ),
+									wfEscapeWikiText( $value ),
+								] );
+							}
+							continue;
+						}
+
+						$newName = str_replace( $placeholder, $value, $name );
+						if ( !$targets ) {
+							try {
+								$results[$newName] = $this->getParameterFromSettings( $newName, $settings, $parseLimit );
+							} catch ( ApiUsageException $ex ) {
+								$results[$newName] = $ex;
+							}
+						} else {
+							$newTargets = [];
+							foreach ( $targets as $k => $v ) {
+								$newTargets[$k] = str_replace( $placeholder, $value, $v );
+							}
+							$toProcess[] = [ $newName, $newTargets, $settings ];
+						}
+					}
+					break;
+				}
+			}
+
 			$this->mParamCache[$parseLimit] = $results;
+		}
+
+		$ret = $this->mParamCache[$parseLimit];
+		if ( !$options['safeMode'] ) {
+			foreach ( $ret as $v ) {
+				if ( $v instanceof ApiUsageException ) {
+					throw $v;
+				}
+			}
 		}
 
 		return $this->mParamCache[$parseLimit];
@@ -775,9 +882,14 @@ abstract class ApiBase extends ContextSource {
 	 * @return mixed Parameter value
 	 */
 	protected function getParameter( $paramName, $parseLimit = true ) {
-		$paramSettings = $this->getFinalParams()[$paramName];
-
-		return $this->getParameterFromSettings( $paramName, $paramSettings, $parseLimit );
+		$ret = $this->extractRequestParams( [
+			'parseLimit' => $parseLimit,
+			'safeMode' => true,
+		] )[$paramName];
+		if ( $ret instanceof ApiUsageException ) {
+			throw $ret;
+		}
+		return $ret;
 	}
 
 	/**
@@ -901,7 +1013,7 @@ abstract class ApiBase extends ContextSource {
 
 		if ( $badParams ) {
 			$this->dieWithError(
-				[ 'apierror-mustpostparams', join( ', ', $badParams ), count( $badParams ) ]
+				[ 'apierror-mustpostparams', implode( ', ', $badParams ), count( $badParams ) ]
 			);
 		}
 	}
@@ -988,7 +1100,7 @@ abstract class ApiBase extends ContextSource {
 	 * Return true if we're to watch the page, false if not, null if no change.
 	 * @param string $watchlist Valid values: 'watch', 'unwatch', 'preferences', 'nochange'
 	 * @param Title $titleObj The page under consideration
-	 * @param string $userOption The user option to consider when $watchlist=preferences.
+	 * @param string|null $userOption The user option to consider when $watchlist=preferences.
 	 *    If not set will use watchdefault always and watchcreations if $titleObj doesn't exist.
 	 * @return bool
 	 */
@@ -1044,36 +1156,16 @@ abstract class ApiBase extends ContextSource {
 			];
 		}
 
-		$default = isset( $paramSettings[self::PARAM_DFLT] )
-			? $paramSettings[self::PARAM_DFLT]
-			: null;
-		$multi = isset( $paramSettings[self::PARAM_ISMULTI] )
-			? $paramSettings[self::PARAM_ISMULTI]
-			: false;
-		$multiLimit1 = isset( $paramSettings[self::PARAM_ISMULTI_LIMIT1] )
-			? $paramSettings[self::PARAM_ISMULTI_LIMIT1]
-			: null;
-		$multiLimit2 = isset( $paramSettings[self::PARAM_ISMULTI_LIMIT2] )
-			? $paramSettings[self::PARAM_ISMULTI_LIMIT2]
-			: null;
-		$type = isset( $paramSettings[self::PARAM_TYPE] )
-			? $paramSettings[self::PARAM_TYPE]
-			: null;
-		$dupes = isset( $paramSettings[self::PARAM_ALLOW_DUPLICATES] )
-			? $paramSettings[self::PARAM_ALLOW_DUPLICATES]
-			: false;
-		$deprecated = isset( $paramSettings[self::PARAM_DEPRECATED] )
-			? $paramSettings[self::PARAM_DEPRECATED]
-			: false;
-		$deprecatedValues = isset( $paramSettings[self::PARAM_DEPRECATED_VALUES] )
-			? $paramSettings[self::PARAM_DEPRECATED_VALUES]
-			: [];
-		$required = isset( $paramSettings[self::PARAM_REQUIRED] )
-			? $paramSettings[self::PARAM_REQUIRED]
-			: false;
-		$allowAll = isset( $paramSettings[self::PARAM_ALL] )
-			? $paramSettings[self::PARAM_ALL]
-			: false;
+		$default = $paramSettings[self::PARAM_DFLT] ?? null;
+		$multi = $paramSettings[self::PARAM_ISMULTI] ?? false;
+		$multiLimit1 = $paramSettings[self::PARAM_ISMULTI_LIMIT1] ?? null;
+		$multiLimit2 = $paramSettings[self::PARAM_ISMULTI_LIMIT2] ?? null;
+		$type = $paramSettings[self::PARAM_TYPE] ?? null;
+		$dupes = $paramSettings[self::PARAM_ALLOW_DUPLICATES] ?? false;
+		$deprecated = $paramSettings[self::PARAM_DEPRECATED] ?? false;
+		$deprecatedValues = $paramSettings[self::PARAM_DEPRECATED_VALUES] ?? [];
+		$required = $paramSettings[self::PARAM_REQUIRED] ?? false;
+		$allowAll = $paramSettings[self::PARAM_ALL] ?? false;
 
 		// When type is not given, and no choices, the type is the same as $default
 		if ( !isset( $type ) ) {
@@ -1133,8 +1225,8 @@ abstract class ApiBase extends ContextSource {
 				) {
 					$type = array_merge( $type, $paramSettings[self::PARAM_EXTRA_NAMESPACES] );
 				}
-				// By default, namespace parameters allow ALL_DEFAULT_STRING to be used to specify
-				// all namespaces.
+				// Namespace parameters allow ALL_DEFAULT_STRING to be used to
+				// specify all namespaces irrespective of PARAM_ALL.
 				$allowAll = true;
 			}
 			if ( isset( $value ) && $type == 'submodule' ) {
@@ -1156,7 +1248,7 @@ abstract class ApiBase extends ContextSource {
 				if ( $multi ) {
 					// This loses the potential $wgContLang->checkTitleEncoding() transformation
 					// done by WebRequest for $_GET. Let's call that a feature.
-					$value = join( "\x1f", $request->normalizeUnicode( explode( "\x1f", $rawValue ) ) );
+					$value = implode( "\x1f", $request->normalizeUnicode( explode( "\x1f", $rawValue ) ) );
 				} else {
 					$this->dieWithError( 'apierror-badvalue-notmultivalue', 'badvalue_notmultivalue' );
 				}
@@ -1201,10 +1293,9 @@ abstract class ApiBase extends ContextSource {
 						}
 						break;
 					case 'integer': // Force everything using intval() and optionally validate limits
-						$min = isset( $paramSettings[self::PARAM_MIN] ) ? $paramSettings[self::PARAM_MIN] : null;
-						$max = isset( $paramSettings[self::PARAM_MAX] ) ? $paramSettings[self::PARAM_MAX] : null;
-						$enforceLimits = isset( $paramSettings[self::PARAM_RANGE_ENFORCE] )
-							? $paramSettings[self::PARAM_RANGE_ENFORCE] : false;
+						$min = $paramSettings[self::PARAM_MIN] ?? null;
+						$max = $paramSettings[self::PARAM_MAX] ?? null;
+						$enforceLimits = $paramSettings[self::PARAM_RANGE_ENFORCE] ?? false;
 
 						if ( is_array( $value ) ) {
 							$value = array_map( 'intval', $value );
@@ -1236,7 +1327,7 @@ abstract class ApiBase extends ContextSource {
 						if ( $multi ) {
 							self::dieDebug( __METHOD__, "Multi-values not supported for $encParamName" );
 						}
-						$min = isset( $paramSettings[self::PARAM_MIN] ) ? $paramSettings[self::PARAM_MIN] : 0;
+						$min = $paramSettings[self::PARAM_MIN] ?? 0;
 						if ( $value == 'max' ) {
 							$value = $this->getMain()->canApiHighLimits()
 								? $paramSettings[self::PARAM_MAX2]
@@ -1408,7 +1499,7 @@ abstract class ApiBase extends ContextSource {
 	protected function parseMultiValue( $valueName, $value, $allowMultiple, $allowedValues,
 		$allSpecifier = null, $limit1 = null, $limit2 = null
 	) {
-		if ( ( trim( $value ) === '' || trim( $value ) === "\x1f" ) && $allowMultiple ) {
+		if ( ( $value === '' || $value === "\x1f" ) && $allowMultiple ) {
 			return [];
 		}
 		$limit1 = $limit1 ?: self::LIMIT_SML1;
@@ -1427,10 +1518,10 @@ abstract class ApiBase extends ContextSource {
 			return $allowedValues;
 		}
 
-		if ( self::truncateArray( $valuesList, $sizeLimit ) ) {
-			$this->addDeprecation(
-				[ 'apiwarn-toomanyvalues', $valueName, $sizeLimit ],
-				"too-many-$valueName-for-{$this->getModulePath()}"
+		if ( count( $valuesList ) > $sizeLimit ) {
+			$this->dieWithError(
+				[ 'apierror-toomanyvalues', $valueName, $sizeLimit ],
+				"too-many-$valueName"
 			);
 		}
 
@@ -1440,22 +1531,15 @@ abstract class ApiBase extends ContextSource {
 				return $value;
 			}
 
-			if ( is_array( $allowedValues ) ) {
-				$values = array_map( function ( $v ) {
-					return '<kbd>' . wfEscapeWikiText( $v ) . '</kbd>';
-				}, $allowedValues );
-				$this->dieWithError( [
-					'apierror-multival-only-one-of',
-					$valueName,
-					Message::listParam( $values ),
-					count( $values ),
-				], "multival_$valueName" );
-			} else {
-				$this->dieWithError( [
-					'apierror-multival-only-one',
-					$valueName,
-				], "multival_$valueName" );
-			}
+			$values = array_map( function ( $v ) {
+				return '<kbd>' . wfEscapeWikiText( $v ) . '</kbd>';
+			}, $allowedValues );
+			$this->dieWithError( [
+				'apierror-multival-only-one-of',
+				$valueName,
+				Message::listParam( $values ),
+				count( $values ),
+			], "multival_$valueName" );
 		}
 
 		if ( is_array( $allowedValues ) ) {
@@ -1490,7 +1574,7 @@ abstract class ApiBase extends ContextSource {
 	 * @param int &$value Parameter value
 	 * @param int|null $min Minimum value
 	 * @param int|null $max Maximum value for users
-	 * @param int $botMax Maximum value for sysops/bots
+	 * @param int|null $botMax Maximum value for sysops/bots
 	 * @param bool $enforceLimits Whether to enforce (die) if value is outside limits
 	 */
 	protected function validateLimit( $paramName, &$value, $min, $max, $botMax = null,
@@ -1541,7 +1625,7 @@ abstract class ApiBase extends ContextSource {
 	}
 
 	/**
-	 * Validate and normalize of parameters of type 'timestamp'
+	 * Validate and normalize parameters of type 'timestamp'
 	 * @param string $value Parameter value
 	 * @param string $encParamName Parameter name
 	 * @return string Validated and normalized parameter
@@ -1563,15 +1647,15 @@ abstract class ApiBase extends ContextSource {
 			return wfTimestamp( TS_MW );
 		}
 
-		$unixTimestamp = wfTimestamp( TS_UNIX, $value );
-		if ( $unixTimestamp === false ) {
+		$timestamp = wfTimestamp( TS_MW, $value );
+		if ( $timestamp === false ) {
 			$this->dieWithError(
 				[ 'apierror-badtimestamp', $encParamName, wfEscapeWikiText( $value ) ],
 				"badtimestamp_{$encParamName}"
 			);
 		}
 
-		return wfTimestamp( TS_MW, $unixTimestamp );
+		return $timestamp;
 	}
 
 	/**
@@ -1613,21 +1697,40 @@ abstract class ApiBase extends ContextSource {
 	}
 
 	/**
-	 * Validate and normalize of parameters of type 'user'
+	 * Validate and normalize parameters of type 'user'
 	 * @param string $value Parameter value
 	 * @param string $encParamName Parameter name
 	 * @return string Validated and normalized parameter
 	 */
 	private function validateUser( $value, $encParamName ) {
-		$title = Title::makeTitleSafe( NS_USER, $value );
-		if ( $title === null || $title->hasFragment() ) {
-			$this->dieWithError(
-				[ 'apierror-baduser', $encParamName, wfEscapeWikiText( $value ) ],
-				"baduser_{$encParamName}"
-			);
+		if ( ExternalUserNames::isExternal( $value ) && User::newFromName( $value, false ) ) {
+			return $value;
 		}
 
-		return $title->getText();
+		$name = User::getCanonicalName( $value, 'valid' );
+		if ( $name !== false ) {
+			return $name;
+		}
+
+		if (
+			// We allow ranges as well, for blocks.
+			IP::isIPAddress( $value ) ||
+			// See comment for User::isIP.  We don't just call that function
+			// here because it also returns true for things like
+			// 300.300.300.300 that are neither valid usernames nor valid IP
+			// addresses.
+			preg_match(
+				'/^' . RE_IP_BYTE . '\.' . RE_IP_BYTE . '\.' . RE_IP_BYTE . '\.xxx$/',
+				$value
+			)
+		) {
+			return IP::sanitizeIP( $value );
+		}
+
+		$this->dieWithError(
+			[ 'apierror-baduser', $encParamName, wfEscapeWikiText( $value ) ],
+			"baduser_{$encParamName}"
+		);
 	}
 
 	/**@}*/
@@ -1641,7 +1744,7 @@ abstract class ApiBase extends ContextSource {
 	 * Set a watch (or unwatch) based the based on a watchlist parameter.
 	 * @param string $watch Valid values: 'watch', 'unwatch', 'preferences', 'nochange'
 	 * @param Title $titleObj The article's title to change
-	 * @param string $userOption The user option to consider when $watch=preferences
+	 * @param string|null $userOption The user option to consider when $watch=preferences
 	 */
 	protected function setWatch( $watch, $titleObj, $userOption = null ) {
 		$value = $this->getWatchlistValue( $watch, $titleObj, $userOption );
@@ -1650,22 +1753,6 @@ abstract class ApiBase extends ContextSource {
 		}
 
 		WatchAction::doWatchOrUnwatch( $value, $titleObj, $this->getUser() );
-	}
-
-	/**
-	 * Truncate an array to a certain length.
-	 * @param array &$arr Array to truncate
-	 * @param int $limit Maximum length
-	 * @return bool True if the array was truncated, false otherwise
-	 */
-	public static function truncateArray( &$arr, $limit ) {
-		$modified = false;
-		while ( count( $arr ) > $limit ) {
-			array_pop( $arr );
-			$modified = true;
-		}
-
-		return $modified;
 	}
 
 	/**
@@ -1725,14 +1812,14 @@ abstract class ApiBase extends ContextSource {
 	 * @since 1.25
 	 * @param string|array|Message $msg
 	 * @param IContextSource $context
-	 * @param array $params
+	 * @param array|null $params
 	 * @return Message|null
 	 */
 	public static function makeMessage( $msg, IContextSource $context, array $params = null ) {
 		if ( is_string( $msg ) ) {
 			$msg = wfMessage( $msg );
 		} elseif ( is_array( $msg ) ) {
-			$msg = call_user_func_array( 'wfMessage', $msg );
+			$msg = wfMessage( ...$msg );
 		}
 		if ( !$msg instanceof Message ) {
 			return null;
@@ -1779,7 +1866,7 @@ abstract class ApiBase extends ContextSource {
 					[ 'blockinfo' => ApiQueryUserInfo::getBlockInfo( $user->getBlock() ) ]
 				) );
 			} else {
-				call_user_func_array( [ $status, 'fatal' ], (array)$error );
+				$status->fatal( ...(array)$error );
 			}
 		}
 		return $status;
@@ -1833,7 +1920,7 @@ abstract class ApiBase extends ContextSource {
 		$msgs = [ $this->msg( 'api-usage-mailinglist-ref' ) ];
 		Hooks::run( 'ApiDeprecationHelp', [ &$msgs ] );
 		if ( count( $msgs ) > 1 ) {
-			$key = '$' . join( ' $', range( 1, count( $msgs ) ) );
+			$key = '$' . implode( ' $', range( 1, count( $msgs ) ) );
 			$msg = ( new RawMessage( $key ) )->params( $msgs );
 		} else {
 			$msg = reset( $msgs );
@@ -1958,10 +2045,7 @@ abstract class ApiBase extends ContextSource {
 		if ( !$status->getErrorsByType( 'error' ) ) {
 			$newStatus = Status::newGood();
 			foreach ( $status->getErrorsByType( 'warning' ) as $err ) {
-				call_user_func_array(
-					[ $newStatus, 'fatal' ],
-					array_merge( [ $err['message'] ], $err['params'] )
-				);
+				$newStatus->fatal( $err['message'], ...$err['params'] );
 			}
 			if ( !$newStatus->getErrorsByType( 'error' ) ) {
 				$newStatus->fatal( 'unknownerror-nocode' );
@@ -1998,7 +2082,7 @@ abstract class ApiBase extends ContextSource {
 			$user = $this->getUser();
 		}
 		$rights = (array)$rights;
-		if ( !call_user_func_array( [ $user, 'isAllowedAny' ], $rights ) ) {
+		if ( !$user->isAllowedAny( ...$rights ) ) {
 			$this->dieWithError( [ 'apierror-permissiondenied', $this->msg( "action-{$rights[0]}" ) ] );
 		}
 	}
@@ -2227,7 +2311,7 @@ abstract class ApiBase extends ContextSource {
 					'api-help-param-token',
 					$this->needsToken(),
 				],
-			] + ( isset( $params['token'] ) ? $params['token'] : [] );
+			] + ( $params['token'] ?? [] );
 		}
 
 		// Avoid PHP 7.1 warning of passing $this by reference
@@ -2267,7 +2351,7 @@ abstract class ApiBase extends ContextSource {
 				$settings = [];
 			}
 
-			$d = isset( $desc[$param] ) ? $desc[$param] : '';
+			$d = $desc[$param] ?? '';
 			if ( is_array( $d ) ) {
 				// Special handling for prop parameters
 				$d = array_map( function ( $line ) {
@@ -2349,9 +2433,7 @@ abstract class ApiBase extends ContextSource {
 				}
 
 				$valueMsgs = $settings[self::PARAM_HELP_MSG_PER_VALUE];
-				$deprecatedValues = isset( $settings[self::PARAM_DEPRECATED_VALUES] )
-					? $settings[self::PARAM_DEPRECATED_VALUES]
-					: [];
+				$deprecatedValues = $settings[self::PARAM_DEPRECATED_VALUES] ?? [];
 
 				foreach ( $settings[self::PARAM_TYPE] as $value ) {
 					if ( isset( $valueMsgs[$value] ) ) {
@@ -2465,7 +2547,7 @@ abstract class ApiBase extends ContextSource {
 				realpath( __DIR__ ) ?: __DIR__ => [
 					'path' => $IP,
 					'name' => 'MediaWiki',
-					'license-name' => 'GPL-2.0+',
+					'license-name' => 'GPL-2.0-or-later',
 				],
 				realpath( "$IP/extensions" ) ?: "$IP/extensions" => null,
 				realpath( $extDir ) ?: $extDir => null,
@@ -2590,29 +2672,17 @@ abstract class ApiBase extends ContextSource {
 	}
 
 	/**
-	 * @deprecated since 1.25, always returns empty string
-	 * @param IDatabase|bool $db
-	 * @return string
-	 */
-	public function getModuleProfileName( $db = false ) {
-		wfDeprecated( __METHOD__, '1.25' );
-		return '';
-	}
-
-	/**
 	 * @deprecated since 1.25
 	 */
 	public function profileIn() {
-		// No wfDeprecated() yet because extensions call this and might need to
-		// keep doing so for BC.
+		wfDeprecated( __METHOD__, '1.25' );
 	}
 
 	/**
 	 * @deprecated since 1.25
 	 */
 	public function profileOut() {
-		// No wfDeprecated() yet because extensions call this and might need to
-		// keep doing so for BC.
+		wfDeprecated( __METHOD__, '1.25' );
 	}
 
 	/**
@@ -2620,15 +2690,6 @@ abstract class ApiBase extends ContextSource {
 	 */
 	public function safeProfileOut() {
 		wfDeprecated( __METHOD__, '1.25' );
-	}
-
-	/**
-	 * @deprecated since 1.25, always returns 0
-	 * @return float
-	 */
-	public function getProfileTime() {
-		wfDeprecated( __METHOD__, '1.25' );
-		return 0;
 	}
 
 	/**
@@ -2643,15 +2704,6 @@ abstract class ApiBase extends ContextSource {
 	 */
 	public function profileDBOut() {
 		wfDeprecated( __METHOD__, '1.25' );
-	}
-
-	/**
-	 * @deprecated since 1.25, always returns 0
-	 * @return float
-	 */
-	public function getProfileDBTime() {
-		wfDeprecated( __METHOD__, '1.25' );
-		return 0;
 	}
 
 	/**
@@ -2731,7 +2783,7 @@ abstract class ApiBase extends ContextSource {
 		if ( !$msg instanceof IApiMessage ) {
 			$key = $msg->getKey();
 			$params = $msg->getParams();
-			array_unshift( $params, isset( self::$messageMap[$key] ) ? self::$messageMap[$key] : $key );
+			array_unshift( $params, self::$messageMap[$key] ?? $key );
 			$msg = ApiMessage::create( $params );
 		}
 
@@ -2978,6 +3030,24 @@ abstract class ApiBase extends ContextSource {
 			"apihelp-{$this->getModulePath()}-description",
 			"apihelp-{$this->getModulePath()}-summary",
 		] ];
+	}
+
+	/**
+	 * Truncate an array to a certain length.
+	 * @deprecated since 1.32, no replacement
+	 * @param array &$arr Array to truncate
+	 * @param int $limit Maximum length
+	 * @return bool True if the array was truncated, false otherwise
+	 */
+	public static function truncateArray( &$arr, $limit ) {
+		wfDeprecated( __METHOD__, '1.32' );
+		$modified = false;
+		while ( count( $arr ) > $limit ) {
+			array_pop( $arr );
+			$modified = true;
+		}
+
+		return $modified;
 	}
 
 	/**@}*/

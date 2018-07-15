@@ -185,7 +185,7 @@ class ServiceContainer implements DestructibleService {
 			throw new NoSuchServiceException( $name );
 		}
 
-		return isset( $this->services[$name] ) ? $this->services[$name] : null;
+		return $this->services[$name] ?? null;
 	}
 
 	/**
@@ -355,11 +355,11 @@ class ServiceContainer implements DestructibleService {
 	 */
 	private function createService( $name ) {
 		if ( isset( $this->serviceInstantiators[$name] ) ) {
-			$service = call_user_func_array(
-				$this->serviceInstantiators[$name],
-				array_merge( [ $this ], $this->extraInstantiationParams )
+			$service = ( $this->serviceInstantiators[$name] )(
+				$this,
+				...$this->extraInstantiationParams
 			);
-			// NOTE: when adding more wiring logic here, make sure copyWiring() is kept in sync!
+			// NOTE: when adding more wiring logic here, make sure importWiring() is kept in sync!
 		} else {
 			throw new NoSuchServiceException( $name );
 		}

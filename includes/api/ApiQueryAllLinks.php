@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on July 7, 2007
- *
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -154,10 +150,10 @@ class ApiQueryAllLinks extends ApiQueryGeneratorBase {
 		}
 
 		// 'continue' always overrides 'from'
-		$from = ( $continue || $params['from'] === null ? null :
-			$this->titlePartToKey( $params['from'], $namespace ) );
-		$to = ( $params['to'] === null ? null :
-			$this->titlePartToKey( $params['to'], $namespace ) );
+		$from = $continue || $params['from'] === null ? null :
+			$this->titlePartToKey( $params['from'], $namespace );
+		$to = $params['to'] === null ? null :
+			$this->titlePartToKey( $params['to'], $namespace );
 		$this->addWhereRange( $pfx . $fieldTitle, 'newer', $from, $to );
 
 		if ( isset( $params['prefix'] ) ) {

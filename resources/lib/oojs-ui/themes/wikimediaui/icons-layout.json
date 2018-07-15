@@ -8,7 +8,8 @@
 			"global": true
 		},
 		"progressive": {
-			"color": "#36c"
+			"color": "#36c",
+			"global": true
 		},
 		"destructive": {
 			"color": "#d33"
@@ -18,23 +19,34 @@
 		}
 	},
 	"images": {
-		"menu": { "file": "images/icons/menu.svg" },
-		"stripeFlow": { "file": {
-			"ltr": "images/icons/stripeFlow-ltr.svg",
-			"rtl": "images/icons/stripeFlow-rtl.svg"
-		} },
-		"stripeSummary": { "file": {
-			"ltr": "images/icons/stripeSummary-ltr.svg",
-			"rtl": "images/icons/stripeSummary-rtl.svg"
-		} },
-		"stripeToC": { "file": {
-			"ltr": "images/icons/stripeToC-ltr.svg",
-			"rtl": "images/icons/stripeToC-rtl.svg"
-		}, "variants": [ "progressive" ] },
-		"viewCompact": { "file": "images/icons/viewCompact.svg" },
-		"viewDetails": { "file": {
-			"ltr": "images/icons/viewDetails-ltr.svg",
-			"rtl": "images/icons/viewDetails-rtl.svg"
-		} }
+		"menu": {
+			"file": "images/icons/menu.svg" },
+		"stripeFlow": {
+			"file": {
+				"ltr": "images/icons/stripeFlow-ltr.svg",
+				"rtl": "images/icons/stripeFlow-rtl.svg"
+			}
+		},
+		"stripeSummary": {
+			"file": {
+				"ltr": "images/icons/stripeSummary-ltr.svg",
+				"rtl": "images/icons/stripeSummary-rtl.svg"
+			}
+		},
+		"stripeToC": {
+			"file": {
+				"ltr": "images/icons/stripeToC-ltr.svg",
+				"rtl": "images/icons/stripeToC-rtl.svg"
+			}
+		},
+		"viewCompact": {
+			"file": "images/icons/viewCompact.svg"
+		},
+		"viewDetails": {
+			"file": {
+				"ltr": "images/icons/viewDetails-ltr.svg",
+				"rtl": "images/icons/viewDetails-rtl.svg"
+			}
+		}
 	}
 }

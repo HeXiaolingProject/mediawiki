@@ -56,7 +56,7 @@ mw.loader.register( [
 				'msg' => 'Version falls back gracefully if getVersionHash throws',
 				'modules' => [
 					'test.fail' => (
-						( $mock = $this->getMockBuilder( 'ResourceLoaderTestModule' )
+						( $mock = $this->getMockBuilder( ResourceLoaderTestModule::class )
 							->setMethods( [ 'getVersionHash' ] )->getMock() )
 						&& $mock->method( 'getVersionHash' )->will(
 							$this->throwException( new Exception )
@@ -81,7 +81,7 @@ mw.loader.state( {
 				'msg' => 'Use version from getVersionHash',
 				'modules' => [
 					'test.version' => (
-						( $mock = $this->getMockBuilder( 'ResourceLoaderTestModule' )
+						( $mock = $this->getMockBuilder( ResourceLoaderTestModule::class )
 							->setMethods( [ 'getVersionHash' ] )->getMock() )
 						&& $mock->method( 'getVersionHash' )->willReturn( '1234567' )
 					) ? $mock : $mock
@@ -101,7 +101,7 @@ mw.loader.register( [
 				'msg' => 'Re-hash version from getVersionHash if too long',
 				'modules' => [
 					'test.version' => (
-						( $mock = $this->getMockBuilder( 'ResourceLoaderTestModule' )
+						( $mock = $this->getMockBuilder( ResourceLoaderTestModule::class )
 							->setMethods( [ 'getVersionHash' ] )->getMock() )
 						&& $mock->method( 'getVersionHash' )->willReturn( '12345678' )
 					) ? $mock : $mock
@@ -160,6 +160,75 @@ mw.loader.addSource( {
 mw.loader.register( [
     [
         "test.blank",
+        "{blankVer}"
+    ]
+] );'
+			] ],
+			[ [
+				'msg' => 'Safemode disabled (default; register all modules)',
+				'modules' => [
+					// Default origin: ORIGIN_CORE_SITEWIDE
+					'test.blank' => new ResourceLoaderTestModule(),
+					'test.core-generated' => new ResourceLoaderTestModule( [
+						'origin' => ResourceLoaderModule::ORIGIN_CORE_INDIVIDUAL
+					] ),
+					'test.sitewide' => new ResourceLoaderTestModule( [
+						'origin' => ResourceLoaderModule::ORIGIN_USER_SITEWIDE
+					] ),
+					'test.user' => new ResourceLoaderTestModule( [
+						'origin' => ResourceLoaderModule::ORIGIN_USER_INDIVIDUAL
+					] ),
+				],
+				'out' => '
+mw.loader.addSource( {
+    "local": "/w/load.php"
+} );
+mw.loader.register( [
+    [
+        "test.blank",
+        "{blankVer}"
+    ],
+    [
+        "test.core-generated",
+        "{blankVer}"
+    ],
+    [
+        "test.sitewide",
+        "{blankVer}"
+    ],
+    [
+        "test.user",
+        "{blankVer}"
+    ]
+] );'
+			] ],
+			[ [
+				'msg' => 'Safemode enabled (filter modules with user/site origin)',
+				'extraQuery' => [ 'safemode' => '1' ],
+				'modules' => [
+					// Default origin: ORIGIN_CORE_SITEWIDE
+					'test.blank' => new ResourceLoaderTestModule(),
+					'test.core-generated' => new ResourceLoaderTestModule( [
+						'origin' => ResourceLoaderModule::ORIGIN_CORE_INDIVIDUAL
+					] ),
+					'test.sitewide' => new ResourceLoaderTestModule( [
+						'origin' => ResourceLoaderModule::ORIGIN_USER_SITEWIDE
+					] ),
+					'test.user' => new ResourceLoaderTestModule( [
+						'origin' => ResourceLoaderModule::ORIGIN_USER_INDIVIDUAL
+					] ),
+				],
+				'out' => '
+mw.loader.addSource( {
+    "local": "/w/load.php"
+} );
+mw.loader.register( [
+    [
+        "test.blank",
+        "{blankVer}"
+    ],
+    [
+        "test.core-generated",
         "{blankVer}"
     ]
 ] );'
@@ -394,7 +463,8 @@ mw.loader.register( [
 			$this->setMwGlobals( 'wgResourceLoaderSources', $case['sources'] );
 		}
 
-		$context = $this->getResourceLoaderContext();
+		$extraQuery = $case['extraQuery'] ?? [];
+		$context = $this->getResourceLoaderContext( $extraQuery );
 		$rl = $context->getResourceLoader();
 		$rl->register( $case['modules'] );
 		$module = new ResourceLoaderStartUpModule();
@@ -488,6 +558,79 @@ mw.loader.register( [
 			self::expandPlaceholders( $out ),
 			$module->getModuleRegistrations( $context ),
 			'Unminified output'
+		);
+	}
+
+	/**
+	 * @covers ResourceLoaderStartupModule::getDefinitionSummary
+	 */
+	public function testGetVersionHash_varyConfig() {
+		$context = $this->getResourceLoaderContext();
+
+		$this->setMwGlobals( 'wgArticlePath', '/w1' );
+		$module = new ResourceLoaderStartupModule();
+		$version1 = $module->getVersionHash( $context );
+		$module = new ResourceLoaderStartupModule();
+		$version2 = $module->getVersionHash( $context );
+		$this->setMwGlobals( 'wgArticlePath', '/w3' );
+		$module = new ResourceLoaderStartupModule();
+		$version3 = $module->getVersionHash( $context );
+
+		$this->assertEquals(
+			$version1,
+			$version2,
+			'Deterministic version hash'
+		);
+
+		$this->assertNotEquals(
+			$version1,
+			$version3,
+			'Config change impacts version hash'
+		);
+	}
+
+	/**
+	 * @covers ResourceLoaderStartupModule::getAllModuleHashes
+	 * @covers ResourceLoaderStartupModule::getDefinitionSummary
+	 */
+	public function testGetVersionHash_varyModule() {
+		$context1 = $this->getResourceLoaderContext();
+		$rl1 = $context1->getResourceLoader();
+		$rl1->register( [
+			'test.a' => new ResourceLoaderTestModule(),
+			'test.b' => new ResourceLoaderTestModule(),
+		] );
+		$module = new ResourceLoaderStartupModule();
+		$version1 = $module->getVersionHash( $context1 );
+
+		$context2 = $this->getResourceLoaderContext();
+		$rl2 = $context2->getResourceLoader();
+		$rl2->register( [
+			'test.b' => new ResourceLoaderTestModule(),
+			'test.c' => new ResourceLoaderTestModule(),
+		] );
+		$module = new ResourceLoaderStartupModule();
+		$version2 = $module->getVersionHash( $context2 );
+
+		$context3 = $this->getResourceLoaderContext();
+		$rl3 = $context3->getResourceLoader();
+		$rl3->register( [
+			'test.a' => new ResourceLoaderTestModule(),
+			'test.b' => new ResourceLoaderTestModule( [ 'script' => 'different' ] ),
+		] );
+		$module = new ResourceLoaderStartupModule();
+		$version3 = $module->getVersionHash( $context3 );
+
+		$this->assertEquals(
+			$version1,
+			$version2,
+			'Module name is insignificant'
+		);
+
+		$this->assertNotEquals(
+			$version1,
+			$version3,
+			'Hash change of any module impacts startup hash'
 		);
 	}
 

@@ -124,6 +124,48 @@ class OutputPageTest extends MediaWikiTestCase {
 		] );
 	}
 
+	public static function provideCdnCacheEpoch() {
+		$base = [
+			'pageTime' => '2011-04-01T12:00:00+00:00',
+			'maxAge' => 24 * 3600,
+		];
+		return [
+			'after 1s' => [ $base + [
+				'reqTime' => '2011-04-01T12:00:01+00:00',
+				'expect' => '2011-04-01T12:00:00+00:00',
+			] ],
+			'after 23h' => [ $base + [
+				'reqTime' => '2011-04-02T11:00:00+00:00',
+				'expect' => '2011-04-01T12:00:00+00:00',
+			] ],
+			'after 24h and a bit' => [ $base + [
+				'reqTime' => '2011-04-02T12:34:56+00:00',
+				'expect' => '2011-04-01T12:34:56+00:00',
+			] ],
+			'after a year' => [ $base + [
+				'reqTime' => '2012-05-06T00:12:07+00:00',
+				'expect' => '2012-05-05T00:12:07+00:00',
+			] ],
+		];
+	}
+
+	/**
+	 * @dataProvider provideCdnCacheEpoch
+	 * @covers OutputPage::getCdnCacheEpoch
+	 */
+	public function testCdnCacheEpoch( $params ) {
+		$out = TestingAccessWrapper::newFromObject( $this->newInstance() );
+		$reqTime = strtotime( $params['reqTime'] );
+		$pageTime = strtotime( $params['pageTime'] );
+		$actual = max( $pageTime, $out->getCdnCacheEpoch( $reqTime, $params['maxAge'] ) );
+
+		$this->assertEquals(
+			$params['expect'],
+			gmdate( DateTime::ATOM, $actual ),
+			'cdn epoch'
+		);
+	}
+
 	/**
 	 * Tests screen requests, without either query parameter set
 	 * @covers OutputPage::transformCssMedia
@@ -266,9 +308,9 @@ class OutputPageTest extends MediaWikiTestCase {
 			'UploadPath' => $uploadPath,
 		] );
 
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$actual = OutputPage::transformResourcePath( $conf, $path );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		$this->assertEquals( $expected ?: $path, $actual );
 	}
@@ -279,7 +321,7 @@ class OutputPageTest extends MediaWikiTestCase {
 			// Single only=scripts load
 			[
 				[ 'test.foo', ResourceLoaderModule::TYPE_SCRIPTS ],
-				"<script>(window.RLQ=window.RLQ||[]).push(function(){"
+				"<script nonce=\"secret\">(window.RLQ=window.RLQ||[]).push(function(){"
 					. 'mw.loader.load("http://127.0.0.1:8080/w/load.php?debug=false\u0026lang=en\u0026modules=test.foo\u0026only=scripts\u0026skin=fallback");'
 					. "});</script>"
 			],
@@ -292,8 +334,34 @@ class OutputPageTest extends MediaWikiTestCase {
 			// Private embed (only=scripts)
 			[
 				[ 'test.quux', ResourceLoaderModule::TYPE_SCRIPTS ],
-				"<script>(window.RLQ=window.RLQ||[]).push(function(){"
+				"<script nonce=\"secret\">(window.RLQ=window.RLQ||[]).push(function(){"
 					. "mw.test.baz({token:123});\nmw.loader.state({\"test.quux\":\"ready\"});"
+					. "});</script>"
+			],
+			// Load private module (combined)
+			[
+				[ 'test.quux', ResourceLoaderModule::TYPE_COMBINED ],
+				"<script nonce=\"secret\">(window.RLQ=window.RLQ||[]).push(function(){"
+					. "mw.loader.implement(\"test.quux@1ev0ijv\",function($,jQuery,require,module){"
+					. "mw.test.baz({token:123});},{\"css\":[\".mw-icon{transition:none}"
+					. "\"]});});</script>"
+			],
+			// Load no modules
+			[
+				[ [], ResourceLoaderModule::TYPE_COMBINED ],
+				'',
+			],
+			// noscript group
+			[
+				[ 'test.noscript', ResourceLoaderModule::TYPE_STYLES ],
+				'<noscript><link rel="stylesheet" href="http://127.0.0.1:8080/w/load.php?debug=false&amp;lang=en&amp;modules=test.noscript&amp;only=styles&amp;skin=fallback"/></noscript>'
+			],
+			// Load two modules in separate groups
+			[
+				[ [ 'test.group.foo', 'test.group.bar' ], ResourceLoaderModule::TYPE_COMBINED ],
+				"<script nonce=\"secret\">(window.RLQ=window.RLQ||[]).push(function(){"
+					. 'mw.loader.load("http://127.0.0.1:8080/w/load.php?debug=false\u0026lang=en\u0026modules=test.group.bar\u0026skin=fallback");'
+					. 'mw.loader.load("http://127.0.0.1:8080/w/load.php?debug=false\u0026lang=en\u0026modules=test.group.foo\u0026skin=fallback");'
 					. "});</script>"
 			],
 		];
@@ -310,14 +378,18 @@ class OutputPageTest extends MediaWikiTestCase {
 		$this->setMwGlobals( [
 			'wgResourceLoaderDebug' => false,
 			'wgLoadScript' => 'http://127.0.0.1:8080/w/load.php',
+			'wgCSPReportOnlyHeader' => true,
 		] );
-		$class = new ReflectionClass( 'OutputPage' );
+		$class = new ReflectionClass( OutputPage::class );
 		$method = $class->getMethod( 'makeResourceLoaderLink' );
 		$method->setAccessible( true );
 		$ctx = new RequestContext();
 		$ctx->setSkin( SkinFactory::getDefaultInstance()->makeSkin( 'fallback' ) );
 		$ctx->setLanguage( 'en' );
 		$out = new OutputPage( $ctx );
+		$nonce = $class->getProperty( 'CSPNonce' );
+		$nonce->setAccessible( true );
+		$nonce->setValue( $out, 'secret' );
 		$rl = $out->getResourceLoader();
 		$rl->setMessageBlobStore( new NullMessageBlobStore() );
 		$rl->register( [
@@ -337,6 +409,18 @@ class OutputPageTest extends MediaWikiTestCase {
 				'script' => 'mw.test.baz( { token: 123 } );',
 				'styles' => '/* pref-animate=off */ .mw-icon { transition: none; }',
 				'group' => 'private',
+			] ),
+			'test.noscript' => new ResourceLoaderTestModule( [
+				'styles' => '.stuff { color: red; }',
+				'group' => 'noscript',
+			] ),
+			'test.group.foo' => new ResourceLoaderTestModule( [
+				'script' => 'mw.doStuff( "foo" );',
+				'group' => 'foo',
+			] ),
+			'test.group.bar' => new ResourceLoaderTestModule( [
+				'script' => 'mw.doStuff( "bar" );',
+				'group' => 'bar',
 			] ),
 		] );
 		$links = $method->invokeArgs( $out, $args );
@@ -398,13 +482,10 @@ class OutputPageTest extends MediaWikiTestCase {
 		$ctx = new RequestContext();
 		$ctx->setSkin( SkinFactory::getDefaultInstance()->makeSkin( 'fallback' ) );
 		$ctx->setLanguage( 'en' );
-		$outputPage = $this->getMockBuilder( 'OutputPage' )
+		$outputPage = $this->getMockBuilder( OutputPage::class )
 			->setConstructorArgs( [ $ctx ] )
-			->setMethods( [ 'isUserCssPreview', 'buildCssLinksArray' ] )
+			->setMethods( [ 'buildCssLinksArray' ] )
 			->getMock();
-		$outputPage->expects( $this->any() )
-			->method( 'isUserCssPreview' )
-			->willReturn( false );
 		$outputPage->expects( $this->any() )
 			->method( 'buildCssLinksArray' )
 			->willReturn( [] );
@@ -434,7 +515,7 @@ class OutputPageTest extends MediaWikiTestCase {
 	 */
 	public function testVaryHeaders( $calls, $vary, $key ) {
 		// get rid of default Vary fields
-		$outputPage = $this->getMockBuilder( 'OutputPage' )
+		$outputPage = $this->getMockBuilder( OutputPage::class )
 			->setConstructorArgs( [ new RequestContext() ] )
 			->setMethods( [ 'getCacheVaryCookies' ] )
 			->getMock();
@@ -539,7 +620,7 @@ class OutputPageTest extends MediaWikiTestCase {
 				'page_title' => 'Test2'
 			]
 		] );
-		$outputPage = $this->getMockBuilder( 'OutputPage' )
+		$outputPage = $this->getMockBuilder( OutputPage::class )
 			->setConstructorArgs( [ new RequestContext() ] )
 			->setMethods( [ 'addCategoryLinksToLBAndGetResult' ] )
 			->getMock();
@@ -673,7 +754,6 @@ class OutputPageTest extends MediaWikiTestCase {
 		$context->setConfig( new HashConfig( $config + [
 			'AppleTouchIcon' => false,
 			'DisableLangConversion' => true,
-			'EnableAPI' => false,
 			'EnableCanonicalServerLink' => false,
 			'Favicon' => false,
 			'Feed' => false,

@@ -16,11 +16,12 @@ use Wikimedia\TestingAccessWrapper;
  * @covers WANObjectCache::getInterimValue
  * @covers WANObjectCache::setInterimValue
  */
-class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
+class WANObjectCacheTest extends PHPUnit\Framework\TestCase {
 
 	use MediaWikiCoversValidator;
+	use PHPUnit4And6Compat;
 
-	/** @var TimeAdjustableWANObjectCache */
+	/** @var WANObjectCache */
 	private $cache;
 	/** @var BagOStuff */
 	private $internalCache;
@@ -28,8 +29,8 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 	protected function setUp() {
 		parent::setUp();
 
-		$this->cache = new TimeAdjustableWANObjectCache( [
-			'cache' => new TimeAdjustableHashBagOStuff(),
+		$this->cache = new WANObjectCache( [
+			'cache' => new HashBagOStuff(),
 			'pool' => 'testcache-hash',
 			'relayer' => new EventRelayerNull( [] )
 		] );
@@ -223,10 +224,11 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( $value, $v, "Value returned" );
 		$this->assertEquals( 0, $wasSet, "Value not regenerated" );
 
-		$priorTime = microtime( true ); // reference time
-		$cache->setTime( $priorTime );
+		$mockWallClock = microtime( true );
+		$priorTime = $mockWallClock; // reference time
+		$cache->setMockTime( $mockWallClock );
 
-		$cache->addTime( 1 );
+		$mockWallClock += 1;
 
 		$wasSet = 0;
 		$v = $cache->getWithSetCallback(
@@ -241,8 +243,8 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$t2 = $cache->getCheckKeyTime( $cKey2 );
 		$this->assertGreaterThanOrEqual( $priorTime, $t2, 'Check keys generated on miss' );
 
-		$priorTime = $cache->addTime( 0.01 );
-
+		$mockWallClock += 0.01;
+		$priorTime = $mockWallClock; // reference time
 		$wasSet = 0;
 		$v = $cache->getWithSetCallback(
 			$key, 30, $func, [ 'checkKeys' => [ $cKey1, $cKey2 ] ] + $extOpts
@@ -283,7 +285,8 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 			return 'xxx' . $wasSet;
 		};
 
-		$now = microtime( true ); // reference time
+		$mockWallClock = microtime( true );
+		$priorTime = $mockWallClock; // reference time
 
 		$wasSet = 0;
 		$key = wfRandomString();
@@ -293,7 +296,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( false, $oldValReceived, "Callback got no stale value" );
 		$this->assertEquals( null, $oldAsOfReceived, "Callback got no stale value" );
 
-		$cache->addTime( 40 );
+		$mockWallClock += 40;
 		$v = $cache->getWithSetCallback(
 			$key, 30, $checkFunc, [ 'staleTTL' => 50 ] + $extOpts );
 		$this->assertEquals( 'xxx2', $v, "Value still returned after expired" );
@@ -301,7 +304,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( 'xxx1', $oldValReceived, "Callback got stale value" );
 		$this->assertNotEquals( null, $oldAsOfReceived, "Callback got stale value" );
 
-		$cache->addTime( 260 );
+		$mockWallClock += 260;
 		$v = $cache->getWithSetCallback(
 			$key, 30, $checkFunc, [ 'staleTTL' => 50 ] + $extOpts );
 		$this->assertEquals( 'xxx3', $v, "Value still returned after expired" );
@@ -309,12 +312,12 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( false, $oldValReceived, "Callback got no stale value" );
 		$this->assertEquals( null, $oldAsOfReceived, "Callback got no stale value" );
 
+		$mockWallClock = ( $priorTime - $cache::HOLDOFF_TTL - 1 );
 		$wasSet = 0;
 		$key = wfRandomString();
 		$checkKey = $cache->makeKey( 'template', 'X' );
-		$cache->setTime( $now - $cache::HOLDOFF_TTL - 1 );
 		$cache->touchCheckKey( $checkKey ); // init check key
-		$cache->setTime( $now );
+		$mockWallClock = $priorTime;
 		$v = $cache->getWithSetCallback(
 			$key,
 			$cache::TTL_INDEFINITE,
@@ -326,7 +329,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( false, $oldValReceived, "Callback got no stale value" );
 		$this->assertEquals( null, $oldAsOfReceived, "Callback got no stale value" );
 
-		$cache->addTime( $cache::TTL_HOUR ); // some time passes
+		$mockWallClock += $cache::TTL_HOUR; // some time passes
 		$v = $cache->getWithSetCallback(
 			$key,
 			$cache::TTL_INDEFINITE,
@@ -337,7 +340,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( 1, $wasSet, "Cached value returned" );
 
 		$cache->touchCheckKey( $checkKey ); // make key stale
-		$cache->addTime( 0.01 ); // ~1 week left of grace (barely stale to avoid refreshes)
+		$mockWallClock += 0.01; // ~1 week left of grace (barely stale to avoid refreshes)
 
 		$v = $cache->getWithSetCallback(
 			$key,
@@ -349,8 +352,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( 1, $wasSet, "Value still returned after expired (in grace)" );
 
 		// Change of refresh increase to unity as staleness approaches graceTTL
-
-		$cache->addTime( $cache::TTL_WEEK ); // 8 days of being stale
+		$mockWallClock += $cache::TTL_WEEK; // 8 days of being stale
 		$v = $cache->getWithSetCallback(
 			$key,
 			$cache::TTL_INDEFINITE,
@@ -407,17 +409,17 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 			$asycList[] = $callback;
 		};
 		$cache = new NearExpiringWANObjectCache( [
-			'cache'        => new TimeAdjustableHashBagOStuff(),
+			'cache'        => new HashBagOStuff(),
 			'pool'         => 'empty',
 			'asyncHandler' => $asyncHandler
 		] );
 
-		$now = microtime( true ); // reference time
-		$cache->setTime( $now );
+		$mockWallClock = microtime( true );
+		$priorTime = $mockWallClock; // reference time
+		$cache->setMockTime( $mockWallClock );
 
 		$wasSet = 0;
 		$key = wfRandomString();
-		$checkKey = wfRandomString();
 		$opts = [ 'lowTTL' => 100 ];
 		$v = $cache->getWithSetCallback( $key, 300, $func, $opts );
 		$this->assertEquals( $value, $v, "Value returned" );
@@ -426,7 +428,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( 1, $wasSet, "Cached value used" );
 		$this->assertEquals( $v, $value, "Value cached" );
 
-		$cache->setTime( $now + 250 );
+		$mockWallClock += 250;
 		$v = $cache->getWithSetCallback( $key, 300, $func, $opts );
 		$this->assertEquals( $value, $v, "Value returned" );
 		$this->assertEquals( 1, $wasSet, "Stale value used" );
@@ -440,11 +442,12 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( $value, $v, "New value stored" );
 
 		$cache = new PopularityRefreshingWANObjectCache( [
-			'cache'   => new TimeAdjustableHashBagOStuff(),
+			'cache'   => new HashBagOStuff(),
 			'pool'    => 'empty'
 		] );
 
-		$cache->setTime( $now );
+		$mockWallClock = $priorTime;
+		$cache->setMockTime( $mockWallClock );
 
 		$wasSet = 0;
 		$key = wfRandomString();
@@ -452,18 +455,22 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$v = $cache->getWithSetCallback( $key, 60, $func, $opts );
 		$this->assertEquals( $value, $v, "Value returned" );
 		$this->assertEquals( 1, $wasSet, "Value calculated" );
-		$cache->setTime( $now + 30 );
+
+		$mockWallClock += 30;
+
 		$v = $cache->getWithSetCallback( $key, 60, $func, $opts );
 		$this->assertEquals( 1, $wasSet, "Value cached" );
 
+		$mockWallClock = $priorTime;
 		$wasSet = 0;
 		$key = wfRandomString();
 		$opts = [ 'hotTTR' => 10 ];
-		$cache->setTime( $now );
 		$v = $cache->getWithSetCallback( $key, 60, $func, $opts );
 		$this->assertEquals( $value, $v, "Value returned" );
 		$this->assertEquals( 1, $wasSet, "Value calculated" );
-		$cache->setTime( $now + 30 );
+
+		$mockWallClock += 30;
+
 		$v = $cache->getWithSetCallback( $key, 60, $func, $opts );
 		$this->assertEquals( $value, $v, "Value returned" );
 		$this->assertEquals( 2, $wasSet, "Value re-calculated" );
@@ -537,10 +544,11 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( 1, $wasSet, "Value not regenerated" );
 		$this->assertEquals( 0, $cache->getWarmupKeyMisses(), "Keys warmed in process cache" );
 
-		$priorTime = microtime( true ); // reference time
-		$cache->setTime( $priorTime );
+		$mockWallClock = microtime( true );
+		$priorTime = $mockWallClock; // reference time
+		$cache->setMockTime( $mockWallClock );
 
-		$cache->addTime( 1 );
+		$mockWallClock += 1;
 
 		$wasSet = 0;
 		$keyedIds = new ArrayIterator( [ $keyB => 'efef' ] );
@@ -556,7 +564,8 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$t2 = $cache->getCheckKeyTime( $cKey2 );
 		$this->assertGreaterThanOrEqual( $priorTime, $t2, 'Check keys generated on miss' );
 
-		$priorTime = $cache->addTime( 0.01 );
+		$mockWallClock += 0.01;
+		$priorTime = $mockWallClock;
 		$value = "@43636$";
 		$wasSet = 0;
 		$keyedIds = new ArrayIterator( [ $keyC => 43636 ] );
@@ -621,7 +630,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( count( $ids ), $calls, "Values cached" );
 
 		// Mock the BagOStuff to assure only one getMulti() call given process caching
-		$localBag = $this->getMockBuilder( 'HashBagOStuff' )
+		$localBag = $this->getMockBuilder( HashBagOStuff::class )
 			->setMethods( [ 'getMulti' ] )->getMock();
 		$localBag->expects( $this->exactly( 1 ) )->method( 'getMulti' )->willReturn( [
 			WANObjectCache::VALUE_KEY_PREFIX . 'k1' => 'val-id1',
@@ -706,10 +715,11 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertEquals( 1, $wasSet, "Value not regenerated" );
 		$this->assertEquals( 0, $cache->getWarmupKeyMisses(), "Keys warmed in process cache" );
 
-		$priorTime = microtime( true ); // reference time
-		$cache->setTime( $priorTime );
+		$mockWallClock = microtime( true );
+		$priorTime = $mockWallClock; // reference time
+		$cache->setMockTime( $mockWallClock );
 
-		$cache->addTime( 1 );
+		$mockWallClock += 1;
 
 		$wasSet = 0;
 		$keyedIds = new ArrayIterator( [ $keyB => 'efef' ] );
@@ -723,7 +733,8 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$t2 = $cache->getCheckKeyTime( $cKey2 );
 		$this->assertGreaterThanOrEqual( $priorTime, $t2, 'Check keys generated on miss' );
 
-		$priorTime = $cache->addTime( 0.01 );
+		$mockWallClock += 0.01;
+		$priorTime = $mockWallClock;
 		$value = "@43636$";
 		$wasSet = 0;
 		$keyedIds = new ArrayIterator( [ $keyC => 43636 ] );
@@ -958,10 +969,11 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$cKey1 = wfRandomString();
 		$cKey2 = wfRandomString();
 
-		$priorTime = microtime( true ); // reference time
-		$cache->setTime( $priorTime );
+		$mockWallClock = microtime( true );
+		$priorTime = $mockWallClock; // reference time
+		$cache->setMockTime( $mockWallClock );
 
-		$cache->addTime( 1 );
+		$mockWallClock += 1;
 
 		$curTTLs = [];
 		$this->assertEquals(
@@ -977,7 +989,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertLessThanOrEqual( 0, $curTTLs[$key1], 'Key 1 has current TTL <= 0' );
 		$this->assertLessThanOrEqual( 0, $curTTLs[$key2], 'Key 2 has current TTL <= 0' );
 
-		$cache->addTime( 1 );
+		$mockWallClock += 1;
 
 		$curTTLs = [];
 		$this->assertEquals(
@@ -1004,7 +1016,8 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$value1 = wfRandomString();
 		$value2 = wfRandomString();
 
-		$cache->setTime( microtime( true ) );
+		$mockWallClock = microtime( true );
+		$cache->setMockTime( $mockWallClock );
 
 		// Fake initial check key to be set in the past. Otherwise we'd have to sleep for
 		// several seconds during the test to assert the behaviour.
@@ -1012,7 +1025,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 			$cache->touchCheckKey( $checkKey, WANObjectCache::HOLDOFF_NONE );
 		}
 
-		$cache->addTime( 0.100 );
+		$mockWallClock += 0.100;
 
 		$cache->set( 'key1', $value1, 10 );
 		$cache->set( 'key2', $value2, 10 );
@@ -1034,7 +1047,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$this->assertGreaterThanOrEqual( 9.5, $curTTLs['key2'], 'Initial ttls' );
 		$this->assertLessThanOrEqual( 10.5, $curTTLs['key2'], 'Initial ttls' );
 
-		$cache->addTime( 0.100 );
+		$mockWallClock += 0.100;
 		$cache->touchCheckKey( $check1 );
 
 		$curTTLs = [];
@@ -1291,15 +1304,16 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$cache = $this->cache;
 		$key = wfRandomString();
 
-		$priorTime = microtime( true ); // reference time
-		$cache->setTime( $priorTime );
+		$mockWallClock = microtime( true );
+		$priorTime = $mockWallClock; // reference time
+		$cache->setMockTime( $mockWallClock );
 
-		$newTime = $cache->addTime( 0.100 );
+		$mockWallClock += 0.100;
 		$t0 = $cache->getCheckKeyTime( $key );
 		$this->assertGreaterThanOrEqual( $priorTime, $t0, 'Check key auto-created' );
 
-		$priorTime = $newTime;
-		$newTime = $cache->addTime( 0.100 );
+		$priorTime = $mockWallClock;
+		$mockWallClock += 0.100;
 		$cache->touchCheckKey( $key );
 		$t1 = $cache->getCheckKeyTime( $key );
 		$this->assertGreaterThanOrEqual( $priorTime, $t1, 'Check key created' );
@@ -1307,7 +1321,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$t2 = $cache->getCheckKeyTime( $key );
 		$this->assertEquals( $t1, $t2, 'Check key time did not change' );
 
-		$cache->addTime( 0.100 );
+		$mockWallClock += 0.100;
 		$cache->touchCheckKey( $key );
 		$t3 = $cache->getCheckKeyTime( $key );
 		$this->assertGreaterThan( $t2, $t3, 'Check key time increased' );
@@ -1315,7 +1329,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$t4 = $cache->getCheckKeyTime( $key );
 		$this->assertEquals( $t3, $t4, 'Check key time did not change' );
 
-		$cache->addTime( 0.100 );
+		$mockWallClock += 0.100;
 		$cache->resetCheckKey( $key );
 		$t5 = $cache->getCheckKeyTime( $key );
 		$this->assertGreaterThan( $t4, $t5, 'Check key time increased' );
@@ -1474,14 +1488,17 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 	}
 
 	public function testMcRouterSupport() {
-		$localBag = $this->getMockBuilder( 'EmptyBagOStuff' )
+		$localBag = $this->getMockBuilder( EmptyBagOStuff::class )
 			->setMethods( [ 'set', 'delete' ] )->getMock();
 		$localBag->expects( $this->never() )->method( 'set' );
 		$localBag->expects( $this->never() )->method( 'delete' );
 		$wanCache = new WANObjectCache( [
 			'cache' => $localBag,
 			'pool' => 'testcache-hash',
-			'relayer' => new EventRelayerNull( [] )
+			'relayer' => new EventRelayerNull( [] ),
+			'mcrouterAware' => true,
+			'region' => 'pmtpa',
+			'cluster' => 'mw-wan'
 		] );
 		$valFunc = function () {
 			return 1;
@@ -1496,6 +1513,60 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 		$wanCache->getCheckKeyTime( 'zzz' );
 		$wanCache->reap( 'x', time() - 300 );
 		$wanCache->reap( 'zzz', time() - 300 );
+	}
+
+	public function testMcRouterSupportBroadcastDelete() {
+		$localBag = $this->getMockBuilder( EmptyBagOStuff::class )
+			->setMethods( [ 'set' ] )->getMock();
+		$wanCache = new WANObjectCache( [
+			'cache' => $localBag,
+			'pool' => 'testcache-hash',
+			'relayer' => new EventRelayerNull( [] ),
+			'mcrouterAware' => true,
+			'region' => 'pmtpa',
+			'cluster' => 'mw-wan'
+		] );
+
+		$localBag->expects( $this->once() )->method( 'set' )
+			->with( "/*/mw-wan/" . $wanCache::VALUE_KEY_PREFIX . "test" );
+
+		$wanCache->delete( 'test' );
+	}
+
+	public function testMcRouterSupportBroadcastTouchCK() {
+		$localBag = $this->getMockBuilder( EmptyBagOStuff::class )
+			->setMethods( [ 'set' ] )->getMock();
+		$wanCache = new WANObjectCache( [
+			'cache' => $localBag,
+			'pool' => 'testcache-hash',
+			'relayer' => new EventRelayerNull( [] ),
+			'mcrouterAware' => true,
+			'region' => 'pmtpa',
+			'cluster' => 'mw-wan'
+		] );
+
+		$localBag->expects( $this->once() )->method( 'set' )
+			->with( "/*/mw-wan/" . $wanCache::TIME_KEY_PREFIX . "test" );
+
+		$wanCache->touchCheckKey( 'test' );
+	}
+
+	public function testMcRouterSupportBroadcastResetCK() {
+		$localBag = $this->getMockBuilder( EmptyBagOStuff::class )
+			->setMethods( [ 'delete' ] )->getMock();
+		$wanCache = new WANObjectCache( [
+			'cache' => $localBag,
+			'pool' => 'testcache-hash',
+			'relayer' => new EventRelayerNull( [] ),
+			'mcrouterAware' => true,
+			'region' => 'pmtpa',
+			'cluster' => 'mw-wan'
+		] );
+
+		$localBag->expects( $this->once() )->method( 'delete' )
+			->with( "/*/mw-wan/" . $wanCache::TIME_KEY_PREFIX . "test" );
+
+		$wanCache->resetCheckKey( 'test' );
 	}
 
 	/**
@@ -1625,43 +1696,7 @@ class WANObjectCacheTest extends PHPUnit_Framework_TestCase {
 	}
 }
 
-class TimeAdjustableHashBagOStuff extends HashBagOStuff {
-	private $timeOverride = 0;
-
-	public function setTime( $time ) {
-		$this->timeOverride = $time;
-	}
-
-	protected function getCurrentTime() {
-		return $this->timeOverride ?: parent::getCurrentTime();
-	}
-}
-
-class TimeAdjustableWANObjectCache extends WANObjectCache {
-	private $timeOverride = 0;
-
-	public function setTime( $time ) {
-		$this->timeOverride = $time;
-		if ( $this->cache instanceof TimeAdjustableHashBagOStuff ) {
-			$this->cache->setTime( $time );
-		}
-	}
-
-	public function addTime( $time ) {
-		$this->timeOverride += $time;
-		if ( $this->cache instanceof TimeAdjustableHashBagOStuff ) {
-			$this->cache->setTime( $this->timeOverride );
-		}
-
-		return $this->timeOverride;
-	}
-
-	protected function getCurrentTime() {
-		return $this->timeOverride ?: parent::getCurrentTime();
-	}
-}
-
-class NearExpiringWANObjectCache extends TimeAdjustableWANObjectCache {
+class NearExpiringWANObjectCache extends WANObjectCache {
 	const CLOCK_SKEW = 1;
 
 	protected function worthRefreshExpiring( $curTTL, $lowTTL ) {
@@ -1669,7 +1704,7 @@ class NearExpiringWANObjectCache extends TimeAdjustableWANObjectCache {
 	}
 }
 
-class PopularityRefreshingWANObjectCache extends TimeAdjustableWANObjectCache {
+class PopularityRefreshingWANObjectCache extends WANObjectCache {
 	protected function worthRefreshPopular( $asOf, $ageNew, $timeTillRefresh, $now ) {
 		return ( ( $now - $asOf ) > $timeTillRefresh );
 	}

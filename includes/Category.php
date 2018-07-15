@@ -48,7 +48,7 @@ class Category {
 
 	/**
 	 * Set up all member variables using a database query.
-	 * @param int $mode
+	 * @param int $mode One of (Category::LOAD_ONLY, Category::LAZY_INIT_ROW)
 	 * @throws MWException
 	 * @return bool True on success, false on failure.
 	 */
@@ -171,7 +171,7 @@ class Category {
 	 *   fields are null, the resulting Category object will represent an empty
 	 *   category if a title object was given. If the fields are null and no
 	 *   title was given, this method fails and returns false.
-	 * @param Title $title Optional title object for the category represented by
+	 * @param Title|null $title Optional title object for the category represented by
 	 *   the given row. May be provided if it is already known, to avoid having
 	 *   to re-create a title object later.
 	 * @return Category|false
@@ -328,24 +328,38 @@ class Category {
 		$dbw = wfGetDB( DB_MASTER );
 		# Avoid excess contention on the same category (T162121)
 		$name = __METHOD__ . ':' . md5( $this->mName );
-		$scopedLock = $dbw->getScopedLockAndFlush( $name, __METHOD__, 1 );
+		$scopedLock = $dbw->getScopedLockAndFlush( $name, __METHOD__, 0 );
 		if ( !$scopedLock ) {
 			return false;
 		}
 
 		$dbw->startAtomic( __METHOD__ );
 
-		$cond1 = $dbw->conditional( [ 'page_namespace' => NS_CATEGORY ], 1, 'NULL' );
-		$cond2 = $dbw->conditional( [ 'page_namespace' => NS_FILE ], 1, 'NULL' );
-		$result = $dbw->selectRow(
+		// Lock the `category` row before locking `categorylinks` rows to try
+		// to avoid deadlocks with LinksDeletionUpdate (T195397)
+		$dbw->lockForUpdate( 'category', [ 'cat_title' => $this->mName ], __METHOD__ );
+
+		// Lock all the `categorylinks` records and gaps for this category;
+		// this is a separate query due to postgres/oracle limitations
+		$dbw->selectRowCount(
 			[ 'categorylinks', 'page' ],
-			[ 'pages' => 'COUNT(*)',
-				'subcats' => "COUNT($cond1)",
-				'files' => "COUNT($cond2)"
-			],
+			'*',
 			[ 'cl_to' => $this->mName, 'page_id = cl_from' ],
 			__METHOD__,
 			[ 'LOCK IN SHARE MODE' ]
+		);
+		// Get the aggregate `categorylinks` row counts for this category
+		$catCond = $dbw->conditional( [ 'page_namespace' => NS_CATEGORY ], 1, 'NULL' );
+		$fileCond = $dbw->conditional( [ 'page_namespace' => NS_FILE ], 1, 'NULL' );
+		$result = $dbw->selectRow(
+			[ 'categorylinks', 'page' ],
+			[
+				'pages' => 'COUNT(*)',
+				'subcats' => "COUNT($catCond)",
+				'files' => "COUNT($fileCond)"
+			],
+			[ 'cl_to' => $this->mName, 'page_id = cl_from' ],
+			__METHOD__
 		);
 
 		$shouldExist = $result->pages > 0 || $this->getTitle()->exists();

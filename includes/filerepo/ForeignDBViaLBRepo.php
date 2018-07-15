@@ -21,6 +21,10 @@
  * @ingroup FileRepo
  */
 
+use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\LoadBalancer;
+
 /**
  * A foreign repository with a MediaWiki database accessible via the configured LBFactory
  *
@@ -37,10 +41,10 @@ class ForeignDBViaLBRepo extends LocalRepo {
 	protected $tablePrefix;
 
 	/** @var array */
-	protected $fileFactory = [ 'ForeignDBFile', 'newFromTitle' ];
+	protected $fileFactory = [ ForeignDBFile::class, 'newFromTitle' ];
 
 	/** @var array */
-	protected $fileFromRowFactory = [ 'ForeignDBFile', 'newFromRow' ];
+	protected $fileFromRowFactory = [ ForeignDBFile::class, 'newFromRow' ];
 
 	/** @var bool */
 	protected $hasSharedCache;
@@ -59,14 +63,14 @@ class ForeignDBViaLBRepo extends LocalRepo {
 	 * @return IDatabase
 	 */
 	function getMasterDB() {
-		return wfGetLB( $this->wiki )->getConnectionRef( DB_MASTER, [], $this->wiki );
+		return $this->getDBLoadBalancer()->getConnectionRef( DB_MASTER, [], $this->wiki );
 	}
 
 	/**
 	 * @return IDatabase
 	 */
 	function getReplicaDB() {
-		return wfGetLB( $this->wiki )->getConnectionRef( DB_REPLICA, [], $this->wiki );
+		return $this->getDBLoadBalancer()->getConnectionRef( DB_REPLICA, [], $this->wiki );
 	}
 
 	/**
@@ -74,8 +78,16 @@ class ForeignDBViaLBRepo extends LocalRepo {
 	 */
 	protected function getDBFactory() {
 		return function ( $index ) {
-			return wfGetLB( $this->wiki )->getConnectionRef( $index, [], $this->wiki );
+			return $this->getDBLoadBalancer()->getConnectionRef( $index, [], $this->wiki );
 		};
+	}
+
+	/**
+	 * @return LoadBalancer
+	 */
+	protected function getDBLoadBalancer() {
+		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+		return $lbFactory->getMainLB( $this->wiki );
 	}
 
 	function hasSharedCache() {

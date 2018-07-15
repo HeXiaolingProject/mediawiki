@@ -65,7 +65,7 @@ class CheckStorage {
 		} else {
 			print "Checking...\n";
 		}
-		$maxRevId = $dbr->selectField( 'revision', 'MAX(rev_id)', false, __METHOD__ );
+		$maxRevId = $dbr->selectField( 'revision', 'MAX(rev_id)', '', __METHOD__ );
 		$chunkSize = 1000;
 		$flagStats = [];
 		$objectStats = [];
@@ -502,7 +502,7 @@ class CheckStorage {
 	function importRevision( &$revision, &$importer ) {
 		$id = $revision->getID();
 		$content = $revision->getContent( Revision::RAW );
-		$id = $id ? $id : '';
+		$id = $id ?: '';
 
 		if ( $content === null ) {
 			echo "Revision $id is broken, we have no content available\n";

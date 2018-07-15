@@ -26,8 +26,8 @@ use MediaWiki\MediaWikiServices;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
-use WrappedString\WrappedString;
 use Wikimedia\Rdbms\DBConnectionError;
+use Wikimedia\WrappedString;
 
 /**
  * Dynamic JavaScript and CSS resource loading system.
@@ -238,8 +238,8 @@ class ResourceLoader implements LoggerAwareInterface {
 
 	/**
 	 * Register core modules and runs registration hooks.
-	 * @param Config $config [optional]
-	 * @param LoggerInterface $logger [optional]
+	 * @param Config|null $config [optional]
+	 * @param LoggerInterface|null $logger [optional]
 	 */
 	public function __construct( Config $config = null, LoggerInterface $logger = null ) {
 		global $IP;
@@ -317,7 +317,7 @@ class ResourceLoader implements LoggerAwareInterface {
 	 * Register a module with the ResourceLoader system.
 	 *
 	 * @param mixed $name Name of module as a string or List of name/object pairs as an array
-	 * @param array $info Module info array. For backwards compatibility with 1.17alpha,
+	 * @param array|null $info Module info array. For backwards compatibility with 1.17alpha,
 	 *   this may also be a ResourceLoaderModule object. Optional when using
 	 *   multiple-registration calling style.
 	 * @throws MWException If a duplicate module registration is attempted
@@ -446,7 +446,7 @@ class ResourceLoader implements LoggerAwareInterface {
 	 * Source IDs are typically the same as the Wiki ID or database name (e.g. lowercase a-z).
 	 *
 	 * @param array|string $id Source ID (string), or [ id1 => loadUrl, id2 => loadUrl, ... ]
-	 * @param string|array $loadUrl load.php url (string), or array with loadUrl key for
+	 * @param string|array|null $loadUrl load.php url (string), or array with loadUrl key for
 	 *  backwards-compatibility.
 	 * @throws MWException
 	 */
@@ -553,7 +553,7 @@ class ResourceLoader implements LoggerAwareInterface {
 				$object->setLogger( $this->logger );
 			} else {
 				if ( !isset( $info['class'] ) ) {
-					$class = 'ResourceLoaderFileModule';
+					$class = ResourceLoaderFileModule::class;
 				} else {
 					$class = $info['class'];
 				}
@@ -570,8 +570,7 @@ class ResourceLoader implements LoggerAwareInterface {
 	}
 
 	/**
-	 * Return whether the definition of a module corresponds to a simple ResourceLoaderFileModule
-	 * or one of its subclasses.
+	 * Whether the module is a ResourceLoaderFileModule (including subclasses).
 	 *
 	 * @param string $name Module name
 	 * @return bool
@@ -584,14 +583,13 @@ class ResourceLoader implements LoggerAwareInterface {
 		if ( isset( $info['object'] ) ) {
 			return false;
 		}
-		if (
-			isset( $info['class'] ) &&
-			$info['class'] !== 'ResourceLoaderFileModule' &&
-			!is_subclass_of( $info['class'], 'ResourceLoaderFileModule' )
-		) {
-			return false;
-		}
-		return true;
+		return (
+			// The implied default for 'class' is ResourceLoaderFileModule
+			!isset( $info['class'] ) ||
+			// Explicit default
+			$info['class'] === ResourceLoaderFileModule::class ||
+			is_subclass_of( $info['class'], ResourceLoaderFileModule::class )
+		);
 	}
 
 	/**
@@ -1103,7 +1101,7 @@ MESSAGE;
 						$strContent = isset( $styles['css'] ) ? implode( '', $styles['css'] ) : '';
 						break;
 					default:
-						$scripts = isset( $content['scripts'] ) ? $content['scripts'] : '';
+						$scripts = $content['scripts'] ?? '';
 						if ( is_string( $scripts ) ) {
 							if ( $name === 'site' || $name === 'user' ) {
 								// Legacy scripts that run in the global scope without a closure.
@@ -1120,9 +1118,9 @@ MESSAGE;
 						$strContent = self::makeLoaderImplementScript(
 							$implementKey,
 							$scripts,
-							isset( $content['styles'] ) ? $content['styles'] : [],
+							$content['styles'] ?? [],
 							isset( $content['messagesBlob'] ) ? new XmlJsCode( $content['messagesBlob'] ) : [],
-							isset( $content['templates'] ) ? $content['templates'] : []
+							$content['templates'] ?? []
 						);
 						break;
 				}
@@ -1227,7 +1225,11 @@ MESSAGE;
 		$name, $scripts, $styles, $messages, $templates
 	) {
 		if ( $scripts instanceof XmlJsCode ) {
-			$scripts = new XmlJsCode( "function ( $, jQuery, require, module ) {\n{$scripts->value}\n}" );
+			if ( self::inDebugMode() ) {
+				$scripts = new XmlJsCode( "function ( $, jQuery, require, module ) {\n{$scripts->value}\n}" );
+			} else {
+				$scripts = new XmlJsCode( 'function($,jQuery,require,module){'. $scripts->value . '}' );
+			}
 		} elseif ( !is_string( $scripts ) && !is_array( $scripts ) ) {
 			throw new MWException( 'Invalid scripts error. Array of URLs or string of code expected.' );
 		}
@@ -1306,7 +1308,7 @@ MESSAGE;
 	 *         Set the state of modules with the given names to the given states
 	 *
 	 * @param string $name
-	 * @param string $state
+	 * @param string|null $state
 	 * @return string JavaScript code
 	 */
 	public static function makeLoaderStateScript( $name, $state = null ) {
@@ -1404,11 +1406,11 @@ MESSAGE;
 	 *        Registers modules with the given names and parameters.
 	 *
 	 * @param string $name Module name
-	 * @param string $version Module version hash
-	 * @param array $dependencies List of module names on which this module depends
-	 * @param string $group Group which the module is in
-	 * @param string $source Source of the module, or 'local' if not foreign
-	 * @param string $skip Script body of the skip function
+	 * @param string|null $version Module version hash
+	 * @param array|null $dependencies List of module names on which this module depends
+	 * @param string|null $group Group which the module is in
+	 * @param string|null $source Source of the module, or 'local' if not foreign
+	 * @param string|null $skip Script body of the skip function
 	 * @return string JavaScript code
 	 */
 	public static function makeLoaderRegisterScript( $name, $version = null,
@@ -1462,7 +1464,7 @@ MESSAGE;
 	 *       Register sources with the given IDs and properties.
 	 *
 	 * @param string $id Source ID
-	 * @param string $loadUrl load.php url
+	 * @param string|null $loadUrl load.php url
 	 * @return string JavaScript code
 	 */
 	public static function makeLoaderSourcesScript( $id, $loadUrl = null ) {
@@ -1482,10 +1484,8 @@ MESSAGE;
 	}
 
 	/**
-	 * Returns JS code which runs given JS code if the client-side framework is
-	 * present.
+	 * Wraps JavaScript code to run after startup and base modules.
 	 *
-	 * @deprecated since 1.25; use makeInlineScript instead
 	 * @param string $script JavaScript code
 	 * @return string JavaScript code
 	 */
@@ -1495,19 +1495,31 @@ MESSAGE;
 	}
 
 	/**
-	 * Construct an inline script tag with given JS code.
+	 * Returns an HTML script tag that runs given JS code after startup and base modules.
 	 *
-	 * The code will be wrapped in a closure, and it will be executed by ResourceLoader
-	 * only if the client has adequate support for MediaWiki JavaScript code.
+	 * The code will be wrapped in a closure, and it will be executed by ResourceLoader's
+	 * startup module if the client has adequate support for MediaWiki JavaScript code.
 	 *
 	 * @param string $script JavaScript code
-	 * @return WrappedString HTML
+	 * @param string|null $nonce [optional] Content-Security-Policy nonce
+	 *  (from OutputPage::getCSPNonce)
+	 * @return string|WrappedString HTML
 	 */
-	public static function makeInlineScript( $script ) {
+	public static function makeInlineScript( $script, $nonce = null ) {
 		$js = self::makeLoaderConditionalScript( $script );
+		$escNonce = '';
+		if ( $nonce === null ) {
+			wfWarn( __METHOD__ . " did not get nonce. Will break CSP" );
+		} elseif ( $nonce !== false ) {
+			// If it was false, CSP is disabled, so no nonce attribute.
+			// Nonce should be only base64 characters, so should be safe,
+			// but better to be safely escaped than sorry.
+			$escNonce = ' nonce="' . htmlspecialchars( $nonce ) . '"';
+		}
+
 		return new WrappedString(
-			Html::inlineScript( $js ),
-			'<script>(window.RLQ=window.RLQ||[]).push(function(){',
+			Html::inlineScript( $js, $nonce ),
+			"<script$escNonce>(window.RLQ=window.RLQ||[]).push(function(){",
 			'});</script>'
 		);
 	}
@@ -1530,27 +1542,31 @@ MESSAGE;
 	/**
 	 * Convert an array of module names to a packed query string.
 	 *
-	 * For example, [ 'foo.bar', 'foo.baz', 'bar.baz', 'bar.quux' ]
-	 * becomes 'foo.bar,baz|bar.baz,quux'
+	 * For example, `[ 'foo.bar', 'foo.baz', 'bar.baz', 'bar.quux' ]`
+	 * becomes `'foo.bar,baz|bar.baz,quux'`.
+	 *
+	 * This process is reversed by ResourceLoaderContext::expandModuleNames().
+	 * See also mw.loader#buildModulesString() which is a port of this, used
+	 * on the client-side.
+	 *
 	 * @param array $modules List of module names (strings)
 	 * @return string Packed query string
 	 */
 	public static function makePackedModulesString( $modules ) {
-		$groups = []; // [ prefix => [ suffixes ] ]
+		$moduleMap = []; // [ prefix => [ suffixes ] ]
 		foreach ( $modules as $module ) {
 			$pos = strrpos( $module, '.' );
 			$prefix = $pos === false ? '' : substr( $module, 0, $pos );
 			$suffix = $pos === false ? $module : substr( $module, $pos + 1 );
-			$groups[$prefix][] = $suffix;
+			$moduleMap[$prefix][] = $suffix;
 		}
 
 		$arr = [];
-		foreach ( $groups as $prefix => $suffixes ) {
+		foreach ( $moduleMap as $prefix => $suffixes ) {
 			$p = $prefix === '' ? '' : $prefix . '.';
 			$arr[] = $p . implode( ',', $suffixes );
 		}
-		$str = implode( '|', $arr );
-		return $str;
+		return implode( '|', $arr );
 	}
 
 	/**
@@ -1628,10 +1644,10 @@ MESSAGE;
 	 * @param array $modules
 	 * @param string $lang
 	 * @param string $skin
-	 * @param string $user
-	 * @param string $version
+	 * @param string|null $user
+	 * @param string|null $version
 	 * @param bool $debug
-	 * @param string $only
+	 * @param string|null $only
 	 * @param bool $printable
 	 * @param bool $handheld
 	 * @param array $extraQuery
@@ -1687,12 +1703,14 @@ MESSAGE;
 	 * Returns LESS compiler set up for use with MediaWiki
 	 *
 	 * @since 1.27
-	 * @param array $extraVars Associative array of extra (i.e., other than the
-	 *   globally-configured ones) that should be used for compilation.
+	 * @param array $vars Associative array of variables that should be used
+	 *  for compilation. Since 1.32, this method no longer automatically includes
+	 *  global LESS vars from ResourceLoader::getLessVars (T191937).
 	 * @throws MWException
 	 * @return Less_Parser
 	 */
-	public function getLessCompiler( $extraVars = [] ) {
+	public function getLessCompiler( $vars = [] ) {
+		global $IP;
 		// When called from the installer, it is possible that a required PHP extension
 		// is missing (at least for now; see T49564). If this is the case, throw an
 		// exception (caught by the installer) to prevent a fatal error later on.
@@ -1701,10 +1719,10 @@ MESSAGE;
 		}
 
 		$parser = new Less_Parser;
-		$parser->ModifyVars( array_merge( $this->getLessVars(), $extraVars ) );
-		$parser->SetImportDirs(
-			array_fill_keys( $this->config->get( 'ResourceLoaderLESSImportPaths' ), '' )
-		);
+		$parser->ModifyVars( $vars );
+		$parser->SetImportDirs( [
+			"$IP/resources/src/mediawiki.less/" => '',
+		] );
 		$parser->SetOption( 'relativeUrls', false );
 
 		return $parser;
@@ -1717,10 +1735,8 @@ MESSAGE;
 	 * @return array Map of variable names to string CSS values.
 	 */
 	public function getLessVars() {
-		if ( !$this->lessVars ) {
-			$lessVars = $this->config->get( 'ResourceLoaderLESSVars' );
-			Hooks::run( 'ResourceLoaderGetLessVars', [ &$lessVars ] );
-			$this->lessVars = $lessVars;
+		if ( $this->lessVars === null ) {
+			$this->lessVars = $this->config->get( 'ResourceLoaderLESSVars' );
 		}
 		return $this->lessVars;
 	}

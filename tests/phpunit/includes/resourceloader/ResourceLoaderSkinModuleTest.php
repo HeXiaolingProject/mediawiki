@@ -3,7 +3,7 @@
 /**
  * @group ResourceLoader
  */
-class ResourceLoaderSkinModuleTest extends PHPUnit_Framework_TestCase {
+class ResourceLoaderSkinModuleTest extends PHPUnit\Framework\TestCase {
 
 	use MediaWikiCoversValidator;
 
@@ -71,8 +71,7 @@ CSS
 
 	/**
 	 * @dataProvider provideGetStyles
-	 * @covers ResourceLoaderSkinModule::normalizeStyles
-	 * @covers ResourceLoaderSkinModule::getStyles
+	 * @covers ResourceLoaderSkinModule
 	 */
 	public function testGetStyles( $parent, $logo, $expected ) {
 		$module = $this->getMockBuilder( ResourceLoaderSkinModule::class )

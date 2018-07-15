@@ -20,7 +20,7 @@
  * @ingroup Media
  * @author Ævar Arnfjörð Bjarmason <avarab@gmail.com>
  * @copyright Copyright © 2005, Ævar Arnfjörð Bjarmason, 2009 Brent Garber, 2010 Brian Wolff
- * @license http://www.gnu.org/copyleft/gpl.html GNU General Public License
+ * @license GPL-2.0-or-later
  * @see http://exif.org/Exif2-2.PDF The Exif 2.2 specification
  * @file
  */
@@ -271,7 +271,7 @@ class FormatMetadata extends ContextSource {
 					// TODO: YCbCrCoefficients  #p27 (see annex E)
 					case 'ExifVersion':
 					case 'FlashpixVersion':
-						$val = "$val" / 100;
+						$val = (int)$val / 100;
 						break;
 
 					case 'ColorSpace':
@@ -787,7 +787,7 @@ class FormatMetadata extends ContextSource {
 							}
 						}
 						if ( is_numeric( $val ) ) {
-							$fNumber = pow( 2, $val / 2 );
+							$fNumber = 2 ** ( $val / 2 );
 							if ( $fNumber !== false ) {
 								$val = $this->msg( 'exif-maxaperturevalue-value',
 									$this->formatNum( $val ),
@@ -971,11 +971,7 @@ class FormatMetadata extends ContextSource {
 
 					case 'LanguageCode':
 						$lang = Language::fetchLanguageName( strtolower( $val ), $this->getLanguage()->getCode() );
-						if ( $lang ) {
-							$val = htmlspecialchars( $lang );
-						} else {
-							$val = htmlspecialchars( $val );
-						}
+						$val = htmlspecialchars( $lang ?: $val );
 						break;
 
 					default:
@@ -1859,9 +1855,9 @@ class FormatMetadata extends ContextSource {
 		// drop all characters which are not valid in an XML tag name
 		// a bunch of non-ASCII letters would be valid but probably won't
 		// be used so we take the easy way
-		$key = preg_replace( '/[^a-zA-z0-9_:.-]/', '', $key );
+		$key = preg_replace( '/[^a-zA-z0-9_:.\-]/', '', $key );
 		// drop characters which are invalid at the first position
-		$key = preg_replace( '/^[\d-.]+/', '', $key );
+		$key = preg_replace( '/^[\d\-.]+/', '', $key );
 
 		if ( $key == '' ) {
 			$key = '_';

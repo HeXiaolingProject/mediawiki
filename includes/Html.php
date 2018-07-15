@@ -391,8 +391,8 @@ class Html {
 			unset( $attribs['type'] );
 		}
 		if ( $element === 'input' ) {
-			$type = isset( $attribs['type'] ) ? $attribs['type'] : null;
-			$value = isset( $attribs['value'] ) ? $attribs['value'] : null;
+			$type = $attribs['type'] ?? null;
+			$value = $attribs['value'] ?? null;
 			if ( $type === 'checkbox' || $type === 'radio' ) {
 				// The default value for checkboxes and radio buttons is 'on'
 				// not ''. By stripping value="" we break radio boxes that
@@ -557,10 +557,18 @@ class Html {
 	 * literal "</script>" or (for XML) literal "]]>".
 	 *
 	 * @param string $contents JavaScript
+	 * @param string|null $nonce Nonce for CSP header, from OutputPage::getCSPNonce()
 	 * @return string Raw HTML
 	 */
-	public static function inlineScript( $contents ) {
+	public static function inlineScript( $contents, $nonce = null ) {
 		$attrs = [];
+		if ( $nonce !== null ) {
+			$attrs['nonce'] = $nonce;
+		} else {
+			if ( ContentSecurityPolicy::isNonceRequired( RequestContext::getMain()->getConfig() ) ) {
+				wfWarn( "no nonce set on script. CSP will break it" );
+			}
+		}
 
 		if ( preg_match( '/[<&]/', $contents ) ) {
 			$contents = "/*<![CDATA[*/$contents/*]]>*/";
@@ -574,10 +582,18 @@ class Html {
 	 * "<script src=foo.js></script>".
 	 *
 	 * @param string $url
+	 * @param string|null $nonce Nonce for CSP header, from OutputPage::getCSPNonce()
 	 * @return string Raw HTML
 	 */
-	public static function linkedScript( $url ) {
+	public static function linkedScript( $url, $nonce = null ) {
 		$attrs = [ 'src' => $url ];
+		if ( $nonce !== null ) {
+			$attrs['nonce'] = $nonce;
+		} else {
+			if ( ContentSecurityPolicy::isNonceRequired( RequestContext::getMain()->getConfig() ) ) {
+				wfWarn( "no nonce set on script. CSP will break it" );
+			}
+		}
 
 		return self::element( 'script', $attrs );
 	}
@@ -589,9 +605,12 @@ class Html {
 	 *
 	 * @param string $contents CSS
 	 * @param string $media A media type string, like 'screen'
+	 * @param array $attribs (since 1.31) Associative array of attributes, e.g., [
+	 *   'href' => 'https://www.mediawiki.org/' ]. See expandAttributes() for
+	 *   further documentation.
 	 * @return string Raw HTML
 	 */
-	public static function inlineStyle( $contents, $media = 'all' ) {
+	public static function inlineStyle( $contents, $media = 'all', $attribs = [] ) {
 		// Don't escape '>' since that is used
 		// as direct child selector.
 		// Remember, in css, there is no "x" for hexadecimal escapes, and
@@ -609,7 +628,7 @@ class Html {
 
 		return self::rawElement( 'style', [
 			'media' => $media,
-		], $contents );
+		] + $attribs, $contents );
 	}
 
 	/**
@@ -906,9 +925,9 @@ class Html {
 		if ( isset( $params['label'] ) ) {
 			$ret .= self::element(
 				'label', [
-					'for' => isset( $selectAttribs['id'] ) ? $selectAttribs['id'] : null,
+					'for' => $selectAttribs['id'] ?? null,
 				], $params['label']
-			) . '&#160;';
+			) . "\u{00A0}";
 		}
 
 		// Wrap options in a <select>

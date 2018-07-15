@@ -57,7 +57,7 @@ class MovePage {
 		// Convert into a Status object
 		if ( $errors ) {
 			foreach ( $errors as $error ) {
-				call_user_func_array( [ $status, 'fatal' ], $error );
+				$status->fatal( ...$error );
 			}
 		}
 
@@ -280,13 +280,7 @@ class MovePage {
 			[ 'cl_from' => $pageid ],
 			__METHOD__
 		);
-		if ( $this->newTitle->getNamespace() == NS_CATEGORY ) {
-			$type = 'subcat';
-		} elseif ( $this->newTitle->getNamespace() == NS_FILE ) {
-			$type = 'file';
-		} else {
-			$type = 'page';
-		}
+		$type = MWNamespace::getCategoryLinkType( $this->newTitle->getNamespace() );
 		foreach ( $prefixes as $prefixRow ) {
 			$prefix = $prefixRow->cl_sortkey_prefix;
 			$catTo = $prefixRow->cl_to;
@@ -415,7 +409,9 @@ class MovePage {
 			new AtomicSectionUpdate(
 				$dbw,
 				__METHOD__,
-				function () use ( $params ) {
+				// Hold onto $user to avoid HHVM bug where it no longer
+				// becomes a reference (T118683)
+				function () use ( $params, &$user ) {
 					Hooks::run( 'TitleMoveComplete', $params );
 				}
 			)
@@ -597,7 +593,12 @@ class MovePage {
 
 				$redirectArticle->doEditUpdates( $redirectRevision, $user, [ 'created' => true ] );
 
-				ChangeTags::addTags( $changeTags, null, $redirectRevId, null );
+				// make a copy because of log entry below
+				$redirectTags = $changeTags;
+				if ( in_array( 'mw-new-redirect', ChangeTags::getSoftwareTags() ) ) {
+					$redirectTags[] = 'mw-new-redirect';
+				}
+				ChangeTags::addTags( $redirectTags, null, $redirectRevId, null );
 			}
 		}
 

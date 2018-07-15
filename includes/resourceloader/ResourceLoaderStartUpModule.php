@@ -1,7 +1,5 @@
 <?php
 /**
- * Module for ResourceLoader initialization.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -22,6 +20,23 @@
  * @author Roan Kattouw
  */
 
+/**
+ * Module for ResourceLoader initialization.
+ *
+ * See also <https://www.mediawiki.org/wiki/ResourceLoader/Features#Startup_Module>
+ *
+ * The startup module, as being called only from ResourceLoaderClientHtml, has
+ * the ability to vary based extra query parameters, in addition to those
+ * from ResourceLoaderContext:
+ *
+ * - target: Only register modules in the client intended for this target.
+ *   Default: "desktop".
+ *   See also: OutputPage::setTarget(), ResourceLoaderModule::getTargets().
+ *
+ * - safemode: Only register modules that have ORIGIN_CORE as their origin.
+ *   This effectively disables ORIGIN_USER modules. (T185303)
+ *   See also: OutputPage::disallowUserJs()
+ */
 class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 
 	// Cache for getConfigSettings() as it's called by multiple methods
@@ -66,6 +81,7 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 		}
 
 		$illegalFileChars = $conf->get( 'IllegalFileChars' );
+		$oldCommentSchema = $conf->get( 'CommentTableSchemaMigrationStage' ) === MIGRATION_OLD;
 
 		// Build list of variables
 		$vars = [
@@ -76,7 +92,6 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 			'wgUrlProtocols' => wfUrlProtocols(),
 			'wgArticlePath' => $conf->get( 'ArticlePath' ),
 			'wgScriptPath' => $conf->get( 'ScriptPath' ),
-			'wgScriptExtension' => '.php',
 			'wgScript' => wfScript(),
 			'wgSearchType' => $conf->get( 'SearchType' ),
 			'wgVariantArticlePath' => $conf->get( 'VariantArticlePath' ),
@@ -89,8 +104,8 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 			'wgContentLanguage' => $wgContLang->getCode(),
 			'wgTranslateNumerals' => $conf->get( 'TranslateNumerals' ),
 			'wgVersion' => $conf->get( 'Version' ),
-			'wgEnableAPI' => $conf->get( 'EnableAPI' ),
-			'wgEnableWriteAPI' => $conf->get( 'EnableWriteAPI' ),
+			'wgEnableAPI' => true, // Deprecated since MW 1.32
+			'wgEnableWriteAPI' => true, // Deprecated since MW 1.32
 			'wgMainPageTitle' => $mainPage->getPrefixedText(),
 			'wgFormattedNamespaces' => $wgContLang->getFormattedNamespaces(),
 			'wgNamespaceIds' => $namespaceIds,
@@ -113,6 +128,8 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 			'wgResourceLoaderStorageEnabled' => $conf->get( 'ResourceLoaderStorageEnabled' ),
 			'wgForeignUploadTargets' => $conf->get( 'ForeignUploadTargets' ),
 			'wgEnableUploads' => $conf->get( 'EnableUploads' ),
+			'wgCommentByteLimit' => $oldCommentSchema ? 255 : null,
+			'wgCommentCodePointLimit' => $oldCommentSchema ? null : CommentStore::COMMENT_CHARACTER_LIMIT,
 		];
 
 		Hooks::run( 'ResourceLoaderGetConfigVars', [ &$vars ] );
@@ -158,10 +175,10 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 	 * Optimize the dependency tree in $this->modules.
 	 *
 	 * The optimization basically works like this:
-	 *	Given we have module A with the dependencies B and C
-	 *		and module B with the dependency C.
-	 *	Now we don't have to tell the client to explicitly fetch module
-	 *		C as that's already included in module B.
+	 * 	Given we have module A with the dependencies B and C
+	 * 		and module B with the dependency C.
+	 * 	Now we don't have to tell the client to explicitly fetch module
+	 * 		C as that's already included in module B.
 	 *
 	 * This way we can reasonably reduce the amount of module registration
 	 * data send to the client.
@@ -192,7 +209,10 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 	 */
 	public function getModuleRegistrations( ResourceLoaderContext $context ) {
 		$resourceLoader = $context->getResourceLoader();
-		$target = $context->getRequest()->getVal( 'target', 'desktop' );
+		// Future developers: Use WebRequest::getRawVal() instead getVal().
+		// The getVal() method performs slow Language+UTF logic. (f303bb9360)
+		$target = $context->getRequest()->getRawVal( 'target', 'desktop' );
+		$safemode = $context->getRequest()->getRawVal( 'safemode' ) === '1';
 		// Bypass target filter if this request is Special:JavaScriptTest.
 		// To prevent misuse in production, this is only allowed if testing is enabled server-side.
 		$byPassTargetFilter = $this->getConfig()->get( 'EnableJavaScriptTest' ) && $target === 'test';
@@ -205,7 +225,10 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 		foreach ( $resourceLoader->getModuleNames() as $name ) {
 			$module = $resourceLoader->getModule( $name );
 			$moduleTargets = $module->getTargets();
-			if ( !$byPassTargetFilter && !in_array( $target, $moduleTargets ) ) {
+			if (
+				( !$byPassTargetFilter && !in_array( $target, $moduleTargets ) )
+				|| ( $safemode && $module->getOrigin() > ResourceLoaderModule::ORIGIN_CORE_INDIVIDUAL )
+			) {
 				continue;
 			}
 
@@ -301,48 +324,64 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 	 * @return array
 	 */
 	public function getPreloadLinks( ResourceLoaderContext $context ) {
-		$url = self::getStartupModulesUrl( $context );
+		$url = $this->getBaseModulesUrl( $context );
 		return [
 			$url => [ 'as' => 'script' ]
 		];
 	}
 
 	/**
-	 * Base modules required for the base environment of ResourceLoader
+	 * Internal modules used by ResourceLoader that cannot be depended on.
 	 *
+	 * These module(s) should have isRaw() return true, and are not
+	 * legal dependencies (enforced by structure/ResourcesTest).
+	 *
+	 * @deprecated since 1.32 No longer used.
 	 * @return array
 	 */
 	public static function getStartupModules() {
-		return [ 'jquery', 'mediawiki' ];
+		wfDeprecated( __METHOD__, '1.32' );
+		return [];
 	}
 
+	/**
+	 * @deprecated since 1.32 No longer used.
+	 * @return array
+	 */
 	public static function getLegacyModules() {
+		wfDeprecated( __METHOD__, '1.32' );
+		return [];
+	}
+
+	/**
+	 * Base modules implicitly available to all modules.
+	 *
+	 * @since 1.32
+	 * @return array
+	 */
+	private function getBaseModules() {
 		global $wgIncludeLegacyJavaScript;
 
-		$legacyModules = [];
+		$baseModules = [ 'jquery', 'mediawiki.base' ];
 		if ( $wgIncludeLegacyJavaScript ) {
-			$legacyModules[] = 'mediawiki.legacy.wikibits';
+			$baseModules[] = 'mediawiki.legacy.wikibits';
 		}
 
-		return $legacyModules;
+		return $baseModules;
 	}
 
 	/**
 	 * Get the load URL of the startup modules.
 	 *
-	 * This is a helper for getScript(), but can also be called standalone, such
-	 * as when generating an AppCache manifest.
+	 * This is a helper for getScript().
 	 *
 	 * @param ResourceLoaderContext $context
 	 * @return string
 	 */
-	public static function getStartupModulesUrl( ResourceLoaderContext $context ) {
+	private function getBaseModulesUrl( ResourceLoaderContext $context ) {
 		$rl = $context->getResourceLoader();
 		$derivative = new DerivativeResourceLoaderContext( $context );
-		$derivative->setModules( array_merge(
-			self::getStartupModules(),
-			self::getLegacyModules()
-		) );
+		$derivative->setModules( $this->getBaseModules() );
 		$derivative->setOnly( 'scripts' );
 		// Must setModules() before makeVersionQuery()
 		$derivative->setVersion( $rl->makeVersionQuery( $derivative ) );
@@ -360,7 +399,15 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 			return '/* Requires only=script */';
 		}
 
-		$out = file_get_contents( "$IP/resources/src/startup.js" );
+		$out = file_get_contents( "$IP/resources/src/startup/startup.js" );
+
+		// Keep in sync with maintenance/jsduck/eg-iframe.html and,
+		// keep in sync with 'fileHashes' in StartUpModule::getDefinitionSummary().
+		$mwLoaderCode = file_get_contents( "$IP/resources/src/startup/mediawiki.js" ) .
+			file_get_contents( "$IP/resources/src/startup/mediawiki.requestIdleCallback.js" );
+		if ( $context->getDebug() ) {
+			$mwLoaderCode .= file_get_contents( "$IP/resources/src/startup/mediawiki.log.js" );
+		}
 
 		$pairs = array_map( function ( $value ) {
 			$value = FormatJson::encode( $value, ResourceLoader::inDebugMode(), FormatJson::ALL_OK );
@@ -371,13 +418,14 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 			'$VARS.wgLegacyJavaScriptGlobals' => $this->getConfig()->get( 'LegacyJavaScriptGlobals' ),
 			'$VARS.configuration' => $this->getConfigSettings( $context ),
 			// This url may be preloaded. See getPreloadLinks().
-			'$VARS.baseModulesUri' => self::getStartupModulesUrl( $context ),
+			'$VARS.baseModulesUri' => $this->getBaseModulesUrl( $context ),
 		] );
-		$pairs['$CODE.registrations()'] = str_replace(
+		$pairs['$CODE.registrations();'] = str_replace(
 			"\n",
 			"\n\t",
 			trim( $this->getModuleRegistrations( $context ) )
 		);
+		$pairs['$CODE.defineLoader();'] = $mwLoaderCode;
 
 		return strtr( $out, $pairs );
 	}
@@ -406,8 +454,10 @@ class ResourceLoaderStartUpModule extends ResourceLoaderModule {
 			// Detect changes to the module registrations
 			'moduleHashes' => $this->getAllModuleHashes( $context ),
 
-			'fileMtimes' => [
-				filemtime( "$IP/resources/src/startup.js" ),
+			'fileHashes' => [
+				$this->safeFileHash( "$IP/resources/src/startup/startup.js" ),
+				$this->safeFileHash( "$IP/resources/src/startup/mediawiki.js" ),
+				$this->safeFileHash( "$IP/resources/src/startup/mediawiki.requestIdleCallback.js" ),
 			],
 		];
 		return $summary;

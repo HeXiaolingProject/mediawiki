@@ -87,11 +87,7 @@ class UserrightsPage extends SpecialPage {
 
 		$out->addModules( [ 'mediawiki.special.userrights' ] );
 
-		if ( $par !== null ) {
-			$this->mTarget = $par;
-		} else {
-			$this->mTarget = $request->getVal( 'user' );
-		}
+		$this->mTarget = $par ?? $request->getVal( 'user' );
 
 		if ( is_string( $this->mTarget ) ) {
 			$this->mTarget = trim( $this->mTarget );
@@ -325,8 +321,8 @@ class UserrightsPage extends SpecialPage {
 	 *   containing only those groups that are to have new expiry values set
 	 * @return array Tuple of added, then removed groups
 	 */
-	function doSaveUserGroups( $user, $add, $remove, $reason = '', $tags = [],
-		$groupExpiries = []
+	function doSaveUserGroups( $user, array $add, array $remove, $reason = '',
+		array $tags = [], array $groupExpiries = []
 	) {
 		// Validate input set...
 		$isself = $user->getName() == $this->getUser()->getName();
@@ -373,7 +369,7 @@ class UserrightsPage extends SpecialPage {
 		}
 		if ( $add ) {
 			foreach ( $add as $index => $group ) {
-				$expiry = isset( $groupExpiries[$group] ) ? $groupExpiries[$group] : null;
+				$expiry = $groupExpiries[$group] ?? null;
 				if ( !$user->addGroup( $group, $expiry ) ) {
 					unset( $add[$index] );
 				}
@@ -427,13 +423,13 @@ class UserrightsPage extends SpecialPage {
 	 * @param User|UserRightsProxy $user
 	 * @param array $oldGroups
 	 * @param array $newGroups
-	 * @param array $reason
+	 * @param string $reason
 	 * @param array $tags Change tags for the log entry
 	 * @param array $oldUGMs Associative array of (group name => UserGroupMembership)
 	 * @param array $newUGMs Associative array of (group name => UserGroupMembership)
 	 */
-	protected function addLogEntry( $user, $oldGroups, $newGroups, $reason, $tags,
-		$oldUGMs, $newUGMs
+	protected function addLogEntry( $user, array $oldGroups, array $newGroups, $reason,
+		array $tags, array $oldUGMs, array $newUGMs
 	) {
 		// make sure $oldUGMs and $newUGMs are in the same order, and serialise
 		// each UGM object to a simplified array
@@ -658,7 +654,7 @@ class UserrightsPage extends SpecialPage {
 			)->escaped();
 
 		$grouplist = '';
-		$count = count( $list );
+		$count = count( $list ) + count( $tempList );
 		if ( $count > 0 ) {
 			$grouplist = $this->msg( 'userrights-groupsmember' )
 				->numParams( $count )
@@ -716,6 +712,8 @@ class UserrightsPage extends SpecialPage {
 				->rawParams( $userToolLinks )->parse()
 		);
 		if ( $canChangeAny ) {
+			$conf = $this->getConfig();
+			$oldCommentSchema = $conf->get( 'CommentTableSchemaMigrationStage' ) === MIGRATION_OLD;
 			$this->getOutput()->addHTML(
 				$this->msg( 'userrights-groups-help', $user->getName() )->parse() .
 				$grouplist .
@@ -726,8 +724,13 @@ class UserrightsPage extends SpecialPage {
 							Xml::label( $this->msg( 'userrights-reason' )->text(), 'wpReason' ) .
 						"</td>
 						<td class='mw-input'>" .
-							Xml::input( 'user-reason', 60, $this->getRequest()->getVal( 'user-reason', false ),
-								[ 'id' => 'wpReason', 'maxlength' => 255 ] ) .
+							Xml::input( 'user-reason', 60, $this->getRequest()->getVal( 'user-reason', false ), [
+								'id' => 'wpReason',
+								// HTML maxlength uses "UTF-16 code units", which means that characters outside BMP
+								// (e.g. emojis) count for two each. This limit is overridden in JS to instead count
+								// Unicode codepoints (or 255 UTF-8 bytes for old schema).
+								'maxlength' => $oldCommentSchema ? 255 : CommentStore::COMMENT_CHARACTER_LIMIT,
+							] ) .
 						"</td>
 					</tr>
 					<tr>
@@ -873,6 +876,10 @@ class UserrightsPage extends SpecialPage {
 						} else {
 							$expiryHtml = $this->msg( 'userrights-expiry-none' )->text();
 						}
+						// T171345: Add a hidden form element so that other groups can still be manipulated,
+						// otherwise saving errors out with an invalid expiry time for this group.
+						$expiryHtml .= Html::hidden( "wpExpiry-$group",
+							$currentExpiry ? 'existing' : 'infinite' );
 						$expiryHtml .= "<br />\n";
 					} else {
 						$expiryHtml = Xml::element( 'span', null,

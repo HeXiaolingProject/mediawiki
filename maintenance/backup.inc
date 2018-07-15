@@ -26,6 +26,7 @@
 
 require_once __DIR__ . '/Maintenance.php';
 
+use MediaWiki\MediaWikiServices;
 use Wikimedia\Rdbms\LoadBalancer;
 use Wikimedia\Rdbms\IDatabase;
 
@@ -75,22 +76,22 @@ class BackupDumper extends Maintenance {
 	private $stubText = false; // include rev_text_id instead of text; for 2-pass dump
 
 	/**
-	 * @param array $args For backward compatibility
+	 * @param array|null $args For backward compatibility
 	 */
 	function __construct( $args = null ) {
 		parent::__construct();
 		$this->stderr = fopen( "php://stderr", "wt" );
 
 		// Built-in output and filter plugins
-		$this->registerOutput( 'file', 'DumpFileOutput' );
-		$this->registerOutput( 'gzip', 'DumpGZipOutput' );
-		$this->registerOutput( 'bzip2', 'DumpBZip2Output' );
-		$this->registerOutput( 'dbzip2', 'DumpDBZip2Output' );
-		$this->registerOutput( '7zip', 'Dump7ZipOutput' );
+		$this->registerOutput( 'file', DumpFileOutput::class );
+		$this->registerOutput( 'gzip', DumpGZipOutput::class );
+		$this->registerOutput( 'bzip2', DumpBZip2Output::class );
+		$this->registerOutput( 'dbzip2', DumpDBZip2Output::class );
+		$this->registerOutput( '7zip', Dump7ZipOutput::class );
 
-		$this->registerFilter( 'latest', 'DumpLatestFilter' );
-		$this->registerFilter( 'notalk', 'DumpNotalkFilter' );
-		$this->registerFilter( 'namespace', 'DumpNamespaceFilter' );
+		$this->registerFilter( 'latest', DumpLatestFilter::class );
+		$this->registerFilter( 'notalk', DumpNotalkFilter::class );
+		$this->registerFilter( 'namespace', DumpNamespaceFilter::class );
 
 		// These three can be specified multiple times
 		$this->addOption( 'plugin', 'Load a dump plugin class. Specify as <class>[:<file>].',
@@ -141,7 +142,7 @@ class BackupDumper extends Maintenance {
 			require_once $file;
 		}
 		$register = [ $class, 'register' ];
-		call_user_func_array( $register, [ $this ] );
+		$register( $this );
 	}
 
 	function execute() {
@@ -323,7 +324,8 @@ class BackupDumper extends Maintenance {
 			return $this->forcedDb;
 		}
 
-		$this->lb = wfGetLBFactory()->newMainLB();
+		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+		$this->lb = $lbFactory->newMainLB();
 		$db = $this->lb->getConnection( DB_REPLICA, 'dump' );
 
 		// Discourage the server from disconnecting us if it takes a long time

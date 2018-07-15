@@ -199,22 +199,22 @@ class LocalisationCache {
 			switch ( $conf['store'] ) {
 				case 'files':
 				case 'file':
-					$storeClass = 'LCStoreCDB';
+					$storeClass = LCStoreCDB::class;
 					break;
 				case 'db':
-					$storeClass = 'LCStoreDB';
+					$storeClass = LCStoreDB::class;
 					break;
 				case 'array':
-					$storeClass = 'LCStoreStaticArray';
+					$storeClass = LCStoreStaticArray::class;
 					break;
 				case 'detect':
 					if ( !empty( $conf['storeDirectory'] ) ) {
-						$storeClass = 'LCStoreCDB';
+						$storeClass = LCStoreCDB::class;
 					} elseif ( $wgCacheDirectory ) {
 						$storeConf['directory'] = $wgCacheDirectory;
-						$storeClass = 'LCStoreCDB';
+						$storeClass = LCStoreCDB::class;
 					} else {
-						$storeClass = 'LCStoreDB';
+						$storeClass = LCStoreDB::class;
 					}
 					break;
 				default:
@@ -292,11 +292,7 @@ class LocalisationCache {
 			$this->loadSubitem( $code, $key, $subkey );
 		}
 
-		if ( isset( $this->data[$code][$key][$subkey] ) ) {
-			return $this->data[$code][$key][$subkey];
-		} else {
-			return null;
-		}
+		return $this->data[$code][$key][$subkey] ?? null;
 	}
 
 	/**
@@ -517,15 +513,15 @@ class LocalisationCache {
 	 */
 	protected function readPHPFile( $_fileName, $_fileType ) {
 		// Disable APC caching
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$_apcEnabled = ini_set( 'apc.cache_by_default', '0' );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		include $_fileName;
 
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		ini_set( 'apc.cache_by_default', $_apcEnabled );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		if ( $_fileType == 'core' || $_fileType == 'extension' ) {
 			$data = compact( self::$allKeys );
@@ -603,11 +599,7 @@ class LocalisationCache {
 		if ( $this->pluralRules === null ) {
 			$this->loadPluralFiles();
 		}
-		if ( !isset( $this->pluralRules[$code] ) ) {
-			return null;
-		} else {
-			return $this->pluralRules[$code];
-		}
+		return $this->pluralRules[$code] ?? null;
 	}
 
 	/**
@@ -621,11 +613,7 @@ class LocalisationCache {
 		if ( $this->pluralRuleTypes === null ) {
 			$this->loadPluralFiles();
 		}
-		if ( !isset( $this->pluralRuleTypes[$code] ) ) {
-			return null;
-		} else {
-			return $this->pluralRuleTypes[$code];
-		}
+		return $this->pluralRuleTypes[$code] ?? null;
 	}
 
 	/**
@@ -1047,11 +1035,7 @@ class LocalisationCache {
 		}
 
 		foreach ( $data['preloadedMessages'] as $subkey ) {
-			if ( isset( $data['messages'][$subkey] ) ) {
-				$subitem = $data['messages'][$subkey];
-			} else {
-				$subitem = null;
-			}
+			$subitem = $data['messages'][$subkey] ?? null;
 			$preload['messages'][$subkey] = $subitem;
 		}
 

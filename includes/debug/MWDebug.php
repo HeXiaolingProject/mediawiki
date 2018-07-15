@@ -431,7 +431,8 @@ class MWDebug {
 			// Cannot use OutputPage::addJsConfigVars because those are already outputted
 			// by the time this method is called.
 			$html = ResourceLoader::makeInlineScript(
-				ResourceLoader::makeConfigSetScript( [ 'debugInfo' => $debugInfo ] )
+				ResourceLoader::makeConfigSetScript( [ 'debugInfo' => $debugInfo ] ),
+				$context->getOutput()->getCSPNonce()
 			);
 		}
 
@@ -517,7 +518,7 @@ class MWDebug {
 			return [];
 		}
 
-		global $wgVersion, $wgRequestTime;
+		global $wgVersion;
 		$request = $context->getRequest();
 
 		// HHVM's reported memory usage from memory_get_peak_usage()
@@ -540,7 +541,7 @@ class MWDebug {
 			'gitRevision' => GitInfo::headSHA1(),
 			'gitBranch' => $branch,
 			'gitViewUrl' => GitInfo::headViewUrl(),
-			'time' => microtime( true ) - $wgRequestTime,
+			'time' => $request->getElapsedTime(),
 			'log' => self::$log,
 			'debugLog' => self::$debug,
 			'queries' => self::$query,

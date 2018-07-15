@@ -23,6 +23,8 @@
  * @file
  */
 
+use MediaWiki\MediaWikiServices;
+
 /**
  * Class to simplify the use of log pages.
  * The logs are now kept in a table which is easier to manage and trim
@@ -35,8 +37,8 @@ class LogPage {
 	const DELETED_RESTRICTED = 8;
 
 	// Convenience fields
-	const SUPPRESSED_USER = 12;
-	const SUPPRESSED_ACTION = 9;
+	const SUPPRESSED_USER = self::DELETED_USER | self::DELETED_RESTRICTED;
+	const SUPPRESSED_ACTION = self::DELETED_ACTION | self::DELETED_RESTRICTED;
 
 	/** @var bool */
 	public $updateRecentChanges;
@@ -97,14 +99,13 @@ class LogPage {
 			'log_type' => $this->type,
 			'log_action' => $this->action,
 			'log_timestamp' => $dbw->timestamp( $now ),
-			'log_user' => $this->doer->getId(),
-			'log_user_text' => $this->doer->getName(),
 			'log_namespace' => $this->target->getNamespace(),
 			'log_title' => $this->target->getDBkey(),
 			'log_page' => $this->target->getArticleID(),
 			'log_params' => $this->params
 		];
-		$data += CommentStore::newKey( 'log_comment' )->insert( $dbw, $this->comment );
+		$data += CommentStore::getStore()->insert( $dbw, 'log_comment', $this->comment );
+		$data += ActorMigration::newMigration()->getInsertValues( $dbw, 'log_user', $this->doer );
 		$dbw->insert( 'logging', $data, __METHOD__ );
 		$newId = $dbw->insertId();
 
@@ -293,22 +294,23 @@ class LogPage {
 			return $title->getPrefixedText();
 		}
 
+		$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
 		if ( $title->isSpecialPage() ) {
 			list( $name, $par ) = SpecialPageFactory::resolveAlias( $title->getDBkey() );
 
 			# Use the language name for log titles, rather than Log/X
 			if ( $name == 'Log' ) {
 				$logPage = new LogPage( $par );
-				$titleLink = Linker::link( $title, $logPage->getName()->escaped() );
+				$titleLink = $linkRenderer->makeLink( $title, $logPage->getName()->text() );
 				$titleLink = wfMessage( 'parentheses' )
 					->inLanguage( $lang )
 					->rawParams( $titleLink )
 					->escaped();
 			} else {
-				$titleLink = Linker::link( $title );
+				$titleLink = $linkRenderer->makeLink( $title );
 			}
 		} else {
-			$titleLink = Linker::link( $title );
+			$titleLink = $linkRenderer->makeLink( $title );
 		}
 
 		return $titleLink;

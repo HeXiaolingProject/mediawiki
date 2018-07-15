@@ -60,7 +60,7 @@ abstract class FileBackendStore extends FileBackend {
 	/**
 	 * @see FileBackend::__construct()
 	 * Additional $config params include:
-	 *   - srvCache     : BagOStuff cache to APC/XCache or the like.
+	 *   - srvCache     : BagOStuff cache to APC or the like.
 	 *   - wanCache     : WANObjectCache object to use for persistent caching.
 	 *   - mimeCallback : Callback that takes (storage path, content, file system path) and
 	 *                    returns the MIME type of the file or 'unknown/unknown'. The file
@@ -70,9 +70,7 @@ abstract class FileBackendStore extends FileBackend {
 	 */
 	public function __construct( array $config ) {
 		parent::__construct( $config );
-		$this->mimeCallback = isset( $config['mimeCallback'] )
-			? $config['mimeCallback']
-			: null;
+		$this->mimeCallback = $config['mimeCallback'] ?? null;
 		$this->srvCache = new EmptyBagOStuff(); // disabled by default
 		$this->memCache = WANObjectCache::newEmpty(); // disabled by default
 		$this->cheapCache = new ProcessCacheLRU( self::CACHE_CHEAP_SIZE );
@@ -378,9 +376,9 @@ abstract class FileBackendStore extends FileBackend {
 		unset( $params['latest'] ); // sanity
 
 		// Check that the specified temp file is valid...
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$ok = ( is_file( $tmpPath ) && filesize( $tmpPath ) == 0 );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 		if ( !$ok ) { // not present or not empty
 			$status->fatal( 'backend-fail-opentemp', $tmpPath );
 
@@ -649,7 +647,7 @@ abstract class FileBackendStore extends FileBackend {
 		$stat = $this->doGetFileStat( $params );
 		if ( is_array( $stat ) ) { // file exists
 			// Strongly consistent backends can automatically set "latest"
-			$stat['latest'] = isset( $stat['latest'] ) ? $stat['latest'] : $latest;
+			$stat['latest'] = $stat['latest'] ?? $latest;
 			$this->cheapCache->set( $path, 'stat', $stat );
 			$this->setFileCache( $path, $stat ); // update persistent cache
 			if ( isset( $stat['sha1'] ) ) { // some backends store SHA-1 as metadata
@@ -696,9 +694,9 @@ abstract class FileBackendStore extends FileBackend {
 	protected function doGetFileContentsMulti( array $params ) {
 		$contents = [];
 		foreach ( $this->doGetLocalReferenceMulti( $params ) as $path => $fsFile ) {
-			MediaWiki\suppressWarnings();
+			Wikimedia\suppressWarnings();
 			$contents[$path] = $fsFile ? file_get_contents( $fsFile->getPath() ) : false;
-			MediaWiki\restoreWarnings();
+			Wikimedia\restoreWarnings();
 		}
 
 		return $contents;
@@ -851,8 +849,8 @@ abstract class FileBackendStore extends FileBackend {
 		$status = $this->newStatus();
 
 		// Always set some fields for subclass convenience
-		$params['options'] = isset( $params['options'] ) ? $params['options'] : [];
-		$params['headers'] = isset( $params['headers'] ) ? $params['headers'] : [];
+		$params['options'] = $params['options'] ?? [];
+		$params['headers'] = $params['headers'] ?? [];
 
 		// Don't stream it out as text/html if there was a PHP error
 		if ( ( empty( $params['headless'] ) || $params['headers'] ) && headers_sent() ) {
@@ -1008,13 +1006,13 @@ abstract class FileBackendStore extends FileBackend {
 	 */
 	final public function getOperationsInternal( array $ops ) {
 		$supportedOps = [
-			'store' => 'StoreFileOp',
-			'copy' => 'CopyFileOp',
-			'move' => 'MoveFileOp',
-			'delete' => 'DeleteFileOp',
-			'create' => 'CreateFileOp',
-			'describe' => 'DescribeFileOp',
-			'null' => 'NullFileOp'
+			'store' => StoreFileOp::class,
+			'copy' => CopyFileOp::class,
+			'move' => MoveFileOp::class,
+			'delete' => DeleteFileOp::class,
+			'create' => CreateFileOp::class,
+			'describe' => DescribeFileOp::class,
+			'null' => NullFileOp::class
 		];
 
 		$performOps = []; // array of FileOp objects
@@ -1301,7 +1299,7 @@ abstract class FileBackendStore extends FileBackend {
 	 *
 	 * @see FileBackend::clearCache()
 	 *
-	 * @param array $paths Storage paths (optional)
+	 * @param array|null $paths Storage paths (optional)
 	 */
 	protected function doClearCache( array $paths = null ) {
 	}
@@ -1324,7 +1322,7 @@ abstract class FileBackendStore extends FileBackend {
 			}
 			if ( is_array( $stat ) ) { // file exists
 				// Strongly consistent backends can automatically set "latest"
-				$stat['latest'] = isset( $stat['latest'] ) ? $stat['latest'] : $latest;
+				$stat['latest'] = $stat['latest'] ?? $latest;
 				$this->cheapCache->set( $path, 'stat', $stat );
 				$this->setFileCache( $path, $stat ); // update persistent cache
 				if ( isset( $stat['sha1'] ) ) { // some backends store SHA-1 as metadata
@@ -1560,7 +1558,7 @@ abstract class FileBackendStore extends FileBackend {
 		$shards = [];
 		list( $digits, $base ) = $this->getContainerHashLevels( $container );
 		if ( $digits > 0 ) {
-			$numShards = pow( $base, $digits );
+			$numShards = $base ** $digits;
 			for ( $index = 0; $index < $numShards; $index++ ) {
 				$shards[] = '.' . Wikimedia\base_convert( $index, 10, $base, $digits );
 			}

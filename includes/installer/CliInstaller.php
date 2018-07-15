@@ -38,7 +38,6 @@ class CliInstaller extends Installer {
 		'dbpass' => 'wgDBpassword',
 		'dbprefix' => 'wgDBprefix',
 		'dbtableoptions' => 'wgDBTableOptions',
-		'dbmysql5' => 'wgDBmysql5',
 		'dbport' => 'wgDBport',
 		'dbschema' => 'wgDBmwschema',
 		'dbpath' => 'wgSQLiteDataDir',
@@ -48,7 +47,7 @@ class CliInstaller extends Installer {
 
 	/**
 	 * @param string $siteName
-	 * @param string $admin
+	 * @param string|null $admin
 	 * @param array $option
 	 */
 	function __construct( $siteName, $admin = null, array $option = [] ) {
@@ -97,7 +96,7 @@ class CliInstaller extends Installer {
 			$this->setVar( '_InstallUser',
 				$option['installdbuser'] );
 			$this->setVar( '_InstallPassword',
-				isset( $option['installdbpass'] ) ? $option['installdbpass'] : "" );
+				$option['installdbpass'] ?? "" );
 
 			// Assume that if we're given the installer user, we'll create the account.
 			$this->setVar( '_CreateDBAccount', true );
@@ -105,6 +104,11 @@ class CliInstaller extends Installer {
 
 		if ( isset( $option['pass'] ) ) {
 			$this->setVar( '_AdminPassword', $option['pass'] );
+		}
+
+		// Detect and inject any extension found
+		if ( isset( $option['with-extensions'] ) ) {
+			$this->setVar( '_Extensions', array_keys( $this->findExtensions() ) );
 		}
 
 		// Set up the default skins
@@ -193,7 +197,7 @@ class CliInstaller extends Installer {
 
 		if ( count( $warnings ) !== 0 ) {
 			foreach ( $warnings as $w ) {
-				call_user_func_array( [ $this, 'showMessage' ], $w );
+				$this->showMessage( ...$w );
 			}
 		}
 

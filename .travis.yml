@@ -23,18 +23,26 @@ matrix:
     # On Trusty, mysql user 'travis' doesn't have create database rights
     # Postgres has no user called 'root'.
     - env: dbtype=mysql dbuser=root
-      php: 5.5
-    - env: dbtype=postgres dbuser=travis
-      php: 5.5
-    # https://docs.travis-ci.com/user/languages/php#HHVM-versions
-    - env: dbtype=mysql dbuser=root
-      php: hhvm-3.18
-    - env: dbtype=mysql dbuser=root
-      php: 7
+      php: 7.2
     - env: dbtype=mysql dbuser=root
       php: 7.1
+    - env: dbtype=postgres dbuser=travis
+      php: 7.1
     - env: dbtype=mysql dbuser=root
-      php: 7.2
+      php: 7
+    # https://docs.travis-ci.com/user/languages/php#HHVM-versions
+    - env: dbtype=mysql dbuser=root
+      php: hhvm-3.24
+    - env: dbtype=mysql dbuser=root
+      php: hhvm-3.21
+    - env: dbtype=mysql dbuser=root
+      php: hhvm-3.18
+  allow_failures:
+    - php: 7.2
+    - env: dbtype=postgres dbuser=travis
+    - php: hhvm-3.18
+    - php: hhvm-3.21
+    - php: hhvm-3.24
 
 services:
   - mysql
@@ -65,6 +73,8 @@ before_script:
       --dbuser "$dbuser"
       --dbpass ""
       --scriptpath "/w"
+  - echo -en "\n\nrequire_once __DIR__ . '/includes/DevelopmentSettings.php';\n" >> ./LocalSettings.php
+  - php -l ./LocalSettings.php
 
 script:
   - php tests/phpunit/phpunit.php
@@ -73,7 +83,8 @@ notifications:
   email: false
   irc:
     channels:
-      - "chat.freenode.net#mediawiki-feed"
+      - "chat.freenode.net#wikimedia-dev"
+    template:
+      - "%{repository}#%{build_number} (%{branch} - %{commit} %{author}): %{message} - %{build_url}"
     on_success: change
-    on_failure: change
-    skip_join: true
+    on_failure: always

@@ -4,7 +4,7 @@
  * @group ResourceLoader
  * @covers DerivativeResourceLoaderContext
  */
-class DerivativeResourceLoaderContextTest extends PHPUnit_Framework_TestCase {
+class DerivativeResourceLoaderContextTest extends PHPUnit\Framework\TestCase {
 
 	use MediaWikiCoversValidator;
 
@@ -117,6 +117,21 @@ class DerivativeResourceLoaderContextTest extends PHPUnit_Framework_TestCase {
 		$derived->setUser( 'Example' );
 		// Assert that subclass is able to clear parent class "hash" member
 		$this->assertEquals( $derived->getHash(), 'nl|fallback||Example|scripts|||||' );
+	}
+
+	public function testContentOverrides() {
+		$derived = new DerivativeResourceLoaderContext( self::getContext() );
+
+		$this->assertNull( $derived->getContentOverrideCallback() );
+
+		$override = function ( Title $t ) {
+			return null;
+		};
+		$derived->setContentOverrideCallback( $override );
+		$this->assertSame( $override, $derived->getContentOverrideCallback() );
+
+		$derived2 = new DerivativeResourceLoaderContext( $derived );
+		$this->assertSame( $override, $derived2->getContentOverrideCallback() );
 	}
 
 	public function testAccessors() {

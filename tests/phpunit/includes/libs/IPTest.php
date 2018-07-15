@@ -8,8 +8,7 @@
  * @todo Test methods in this call should be split into a method and a
  * dataprovider.
  */
-
-class IPTest extends PHPUnit_Framework_TestCase {
+class IPTest extends PHPUnit\Framework\TestCase {
 
 	use MediaWikiCoversValidator;
 
@@ -17,7 +16,7 @@ class IPTest extends PHPUnit_Framework_TestCase {
 	 * @covers IP::isIPAddress
 	 * @dataProvider provideInvalidIPs
 	 */
-	public function isNotIPAddress( $val, $desc ) {
+	public function testIsNotIPAddress( $val, $desc ) {
 		$this->assertFalse( IP::isIPAddress( $val ), $desc );
 	}
 
@@ -326,6 +325,7 @@ class IPTest extends PHPUnit_Framework_TestCase {
 			[ '0.0.0.0', '0.0.0.0' ],
 			[ '0.0.0.0', '00.00.00.00' ],
 			[ '0.0.0.0', '000.000.000.000' ],
+			[ '0.0.0.0/24', '000.000.000.000/24' ],
 			[ '141.0.11.253', '141.000.011.253' ],
 			[ '1.2.4.5', '1.2.4.5' ],
 			[ '1.2.4.5', '01.02.04.05' ],

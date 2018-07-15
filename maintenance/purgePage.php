@@ -46,8 +46,8 @@ class PurgePage extends Maintenance {
 		}
 	}
 
-	private function purge( $title ) {
-		$title = Title::newFromText( $title );
+	private function purge( $titleText ) {
+		$title = Title::newFromText( $titleText );
 
 		if ( is_null( $title ) ) {
 			$this->error( 'Invalid page title' );
@@ -67,12 +67,12 @@ class PurgePage extends Maintenance {
 		}
 
 		if ( $page->doPurge() ) {
-			$this->output( "Purged\n" );
+			$this->output( "Purged {$titleText}\n" );
 		} else {
-			$this->error( "Purge failed" );
+			$this->error( "Purge failed for {$titleText}" );
 		}
 	}
 }
 
-$maintClass = "PurgePage";
+$maintClass = PurgePage::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

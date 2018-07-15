@@ -117,7 +117,7 @@ class SqlBagOStuff extends BagOStuff {
 				if ( is_string( $tag ) ) {
 					$this->serverTags[$index] = $tag;
 				} else {
-					$this->serverTags[$index] = isset( $info['host'] ) ? $info['host'] : "#$index";
+					$this->serverTags[$index] = $info['host'] ?? "#$index";
 				}
 				++$index;
 			}
@@ -168,8 +168,8 @@ class SqlBagOStuff extends BagOStuff {
 			if ( $this->serverInfos ) {
 				// Use custom database defined by server connection info
 				$info = $this->serverInfos[$serverIndex];
-				$type = isset( $info['type'] ) ? $info['type'] : 'mysql';
-				$host = isset( $info['host'] ) ? $info['host'] : '[unknown]';
+				$type = $info['type'] ?? 'mysql';
+				$host = $info['host'] ?? '[unknown]';
 				$this->logger->debug( __CLASS__ . ": connecting to $host" );
 				// Use a blank trx profiler to ignore expections as this is a cache
 				$info['trxProfiler'] = new TransactionProfiler();
@@ -181,7 +181,7 @@ class SqlBagOStuff extends BagOStuff {
 				$index = $this->replicaOnly ? DB_REPLICA : DB_MASTER;
 				if ( $lb->getServerType( $lb->getWriterIndex() ) !== 'sqlite' ) {
 					// Keep a separate connection to avoid contention and deadlocks
-					$db = $lb->getConnection( $index, [], false, $lb::CONN_TRX_AUTO );
+					$db = $lb->getConnection( $index, [], false, $lb::CONN_TRX_AUTOCOMMIT );
 					// @TODO: Use a blank trx profiler to ignore expections as this is a cache
 				} else {
 					// However, SQLite has the opposite behavior due to DB-level locking.
@@ -681,9 +681,9 @@ class SqlBagOStuff extends BagOStuff {
 	 */
 	protected function unserialize( $serial ) {
 		if ( function_exists( 'gzinflate' ) ) {
-			MediaWiki\suppressWarnings();
+			Wikimedia\suppressWarnings();
 			$decomp = gzinflate( $serial );
-			MediaWiki\restoreWarnings();
+			Wikimedia\restoreWarnings();
 
 			if ( false !== $decomp ) {
 				$serial = $decomp;

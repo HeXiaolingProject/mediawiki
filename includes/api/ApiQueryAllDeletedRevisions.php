@@ -1,7 +1,5 @@
 <?php
 /**
- * Created on Oct 3, 2014
- *
  * Copyright © 2014 Wikimedia Foundation and contributors
  *
  * Heavily based on ApiQueryDeletedrevs,
@@ -37,7 +35,7 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 	}
 
 	/**
-	 * @param ApiPageSet $resultPageSet
+	 * @param ApiPageSet|null $resultPageSet
 	 * @return void
 	 */
 	protected function run( ApiPageSet $resultPageSet = null ) {
@@ -138,16 +136,11 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 		}
 
 		if ( $this->fetchContent ) {
-			// Modern MediaWiki has the content for deleted revs in the 'text'
-			// table using fields old_text and old_flags. But revisions deleted
-			// pre-1.5 store the content in the 'archive' table directly using
-			// fields ar_text and ar_flags, and no corresponding 'text' row. So
-			// we have to LEFT JOIN and fetch all four fields.
 			$this->addTables( 'text' );
 			$this->addJoinConds(
 				[ 'text' => [ 'LEFT JOIN', [ 'ar_text_id=old_id' ] ] ]
 			);
-			$this->addFields( [ 'ar_text', 'ar_flags', 'old_text', 'old_flags' ] );
+			$this->addFields( [ 'old_text', 'old_flags' ] );
 
 			// This also means stricter restrictions
 			$this->checkUserRightsAny( [ 'deletedtext', 'undelete' ] );
@@ -156,11 +149,7 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 		$miser_ns = null;
 
 		if ( $mode == 'all' ) {
-			if ( $params['namespace'] !== null ) {
-				$namespaces = $params['namespace'];
-			} else {
-				$namespaces = MWNamespace::getValidNamespaces();
-			}
+			$namespaces = $params['namespace'] ?? MWNamespace::getValidNamespaces();
 			$this->addWhereFld( 'ar_namespace', $namespaces );
 
 			// For from/to/prefix, we have to consider the potential
@@ -226,10 +215,19 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 		}
 
 		if ( !is_null( $params['user'] ) ) {
-			$this->addWhereFld( 'ar_user_text', $params['user'] );
+			// Don't query by user ID here, it might be able to use the ar_usertext_timestamp index.
+			$actorQuery = ActorMigration::newMigration()
+				->getWhere( $db, 'ar_user', User::newFromName( $params['user'], false ), false );
+			$this->addTables( $actorQuery['tables'] );
+			$this->addJoinConds( $actorQuery['joins'] );
+			$this->addWhere( $actorQuery['conds'] );
 		} elseif ( !is_null( $params['excludeuser'] ) ) {
-			$this->addWhere( 'ar_user_text != ' .
-				$db->addQuotes( $params['excludeuser'] ) );
+			// Here there's no chance of using ar_usertext_timestamp.
+			$actorQuery = ActorMigration::newMigration()
+				->getWhere( $db, 'ar_user', User::newFromName( $params['excludeuser'], false ) );
+			$this->addTables( $actorQuery['tables'] );
+			$this->addJoinConds( $actorQuery['joins'] );
+			$this->addWhere( 'NOT(' . $actorQuery['conds'] . ')' );
 		}
 
 		if ( !is_null( $params['user'] ) || !is_null( $params['excludeuser'] ) ) {

@@ -47,6 +47,8 @@ abstract class AbstractChangesListSpecialPageTestCase extends MediaWikiTestCase 
 		$this->changesListSpecialPage->registerFilters();
 	}
 
+	abstract protected function getPage();
+
 	protected function tearDown() {
 		global $wgGroupPermissions;
 
@@ -56,6 +58,8 @@ abstract class AbstractChangesListSpecialPageTestCase extends MediaWikiTestCase 
 			$wgGroupPermissions['patrollers'] = $this->oldPatrollersGroup;
 		}
 	}
+
+	abstract public function provideParseParameters();
 
 	/**
 	 * @dataProvider provideParseParameters
@@ -97,7 +101,7 @@ abstract class AbstractChangesListSpecialPageTestCase extends MediaWikiTestCase 
 		$output->method( 'redirect' )->willReturnCallback(
 			function ( $url ) use ( &$redirectQuery, &$redirected ) {
 				$urlParts = wfParseUrl( $url );
-				$query = isset( $urlParts[ 'query' ] ) ? $urlParts[ 'query' ] : '';
+				$query = $urlParts[ 'query' ] ?? '';
 				parse_str( $query, $redirectQuery );
 				$redirected = true;
 			}

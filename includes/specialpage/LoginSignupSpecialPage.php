@@ -515,7 +515,6 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 	 * @private
 	 */
 	protected function mainLoginForm( array $requests, $msg = '', $msgtype = 'error' ) {
-		$titleObj = $this->getPageTitle();
 		$user = $this->getUser();
 		$out = $this->getOutput();
 
@@ -847,8 +846,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 
 		// keep the ordering from getCoreFieldDescriptors() where there is no explicit weight
 		foreach ( $coreFieldDescriptors as $fieldName => $coreField ) {
-			$requestField = isset( $formDescriptor[$fieldName] ) ?
-				$formDescriptor[$fieldName] : [];
+			$requestField = $formDescriptor[$fieldName] ?? [];
 
 			// remove everything that is not in the fieldinfo, is not marked as a supplemental field
 			// to something in the fieldinfo, is not B/C for the pre-AuthManager templates,
@@ -1064,7 +1062,7 @@ abstract class LoginSignupSpecialPage extends AuthManagerSpecialPage {
 					// 'id' => 'mw-userlogin-help', // FIXME HTMLInfoField ignores this
 					'raw' => true,
 					'default' => Html::element( 'a', [
-						'href' => Skin::makeInternalOrExternalUrl( wfMessage( 'helplogin-url' )
+						'href' => Skin::makeInternalOrExternalUrl( $this->msg( 'helplogin-url' )
 							->inContentLanguage()
 							->text() ),
 					], $this->msg( 'userlogin-helplink2' )->text() ),
@@ -1493,7 +1491,7 @@ class LoginForm extends SpecialPage {
 	];
 
 	/**
-	 * @param WebRequest $request
+	 * @param WebRequest|null $request
 	 */
 	public function __construct( $request = null ) {
 		wfDeprecated( 'LoginForm', '1.27' );

@@ -23,7 +23,10 @@
  * @file
  * @ingroup Deployment
  */
+
+use MediaWiki\Interwiki\NullInterwikiLookup;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Shell\Shell;
 
 /**
  * This documentation group collects source code files with deployment functionality.
@@ -243,7 +246,6 @@ abstract class Installer {
 	 * @var array
 	 */
 	protected $objectCaches = [
-		'xcache' => 'xcache_get',
 		'apc' => 'apc_fetch',
 		'apcu' => 'apcu_fetch',
 		'wincache' => 'wincache_ucache_get'
@@ -364,7 +366,7 @@ abstract class Installer {
 
 		// disable (problematic) object cache types explicitly, preserving all other (working) ones
 		// bug T113843
-		$emptyCache = [ 'class' => 'EmptyBagOStuff' ];
+		$emptyCache = [ 'class' => EmptyBagOStuff::class ];
 
 		$objectCaches = [
 				CACHE_NONE => $emptyCache,
@@ -404,7 +406,7 @@ abstract class Installer {
 		$installerConfig = self::getInstallerConfig( $defaultConfig );
 
 		// Reset all services and inject config overrides
-		MediaWiki\MediaWikiServices::resetGlobalInstance( $installerConfig );
+		MediaWikiServices::resetGlobalInstance( $installerConfig );
 
 		// Don't attempt to load user language options (T126177)
 		// This will be overridden in the web installer with the user-specified language
@@ -415,12 +417,18 @@ abstract class Installer {
 		Language::getLocalisationCache()->disableBackend();
 
 		// Disable all global services, since we don't have any configuration yet!
-		MediaWiki\MediaWikiServices::disableStorageBackend();
+		MediaWikiServices::disableStorageBackend();
 
+		$mwServices = MediaWikiServices::getInstance();
 		// Disable object cache (otherwise CACHE_ANYTHING will try CACHE_DB and
 		// SqlBagOStuff will then throw since we just disabled wfGetDB)
-		$wgObjectCaches = MediaWikiServices::getInstance()->getMainConfig()->get( 'ObjectCaches' );
+		$wgObjectCaches = $mwServices->getMainConfig()->get( 'ObjectCaches' );
 		$wgMemc = ObjectCache::getInstance( CACHE_NONE );
+
+		// Disable interwiki lookup, to avoid database access during parses
+		$mwServices->redefineService( 'InterwikiLookup', function () {
+			return new NullInterwikiLookup();
+		} );
 
 		// Having a user with id = 0 safeguards us from DB access via User::loadOptions().
 		$wgUser = User::newFromId( 0 );
@@ -446,8 +454,6 @@ abstract class Installer {
 
 		$this->parserTitle = Title::newFromText( 'Installer' );
 		$this->parserOptions = new ParserOptions( $wgUser ); // language will be wrong :(
-		$this->parserOptions->setEditSection( false );
-		$this->parserOptions->setWrapOutputClass( false );
 		// Don't try to access DB before user language is initialised
 		$this->setParserLanguage( Language::factory( 'en' ) );
 	}
@@ -525,7 +531,7 @@ abstract class Installer {
 	 * Installer variables are typically prefixed by an underscore.
 	 *
 	 * @param string $name
-	 * @param mixed $default
+	 * @param mixed|null $default
 	 *
 	 * @return mixed
 	 */
@@ -600,9 +606,9 @@ abstract class Installer {
 		// phpcs:ignore MediaWiki.VariableAnalysis.UnusedGlobalVariables
 		global $wgExtensionDirectory, $wgStyleDirectory;
 
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$_lsExists = file_exists( "$IP/LocalSettings.php" );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		if ( !$_lsExists ) {
 			return false;
@@ -689,6 +695,7 @@ abstract class Installer {
 			$out = $wgParser->parse( $text, $this->parserTitle, $this->parserOptions, $lineStart );
 			$html = $out->getText( [
 				'enableSectionEditLinks' => false,
+				'unwrap' => true,
 			] );
 		} catch ( MediaWiki\Services\ServiceDisabledException $e ) {
 			$html = '<!--DB access attempted during parse-->  ' . htmlspecialchars( $text );
@@ -806,14 +813,14 @@ abstract class Installer {
 	 * @return bool
 	 */
 	protected function envCheckPCRE() {
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$regexd = preg_replace( '/[\x{0430}-\x{04FF}]/iu', '', '-АБВГД-' );
 		// Need to check for \p support too, as PCRE can be compiled
 		// with utf8 support, but not unicode property support.
 		// check that \p{Zs} (space separators) matches
 		// U+3000 (Ideographic space)
-		$regexprop = preg_replace( '/\p{Zs}/u', '', "-\xE3\x80\x80-" );
-		MediaWiki\restoreWarnings();
+		$regexprop = preg_replace( '/\p{Zs}/u', '', "-\u{3000}-" );
+		Wikimedia\restoreWarnings();
 		if ( $regexd != '--' || $regexprop != '--' ) {
 			$this->showError( 'config-pcre-no-utf8' );
 
@@ -857,9 +864,6 @@ abstract class Installer {
 		$caches = [];
 		foreach ( $this->objectCaches as $name => $function ) {
 			if ( function_exists( $function ) ) {
-				if ( $name == 'xcache' && !wfIniGetBool( 'xcache.var_size' ) ) {
-					continue;
-				}
 				$caches[$name] = true;
 			}
 		}
@@ -994,18 +998,22 @@ abstract class Installer {
 			return true;
 		}
 
-		# Get a list of available locales.
-		$ret = false;
-		$lines = wfShellExec( '/usr/bin/locale -a', $ret );
-
-		if ( $ret ) {
+		if ( Shell::isDisabled() ) {
 			return true;
 		}
 
+		# Get a list of available locales.
+		$result = Shell::command( '/usr/bin/locale', '-a' )
+			->execute();
+
+		if ( $result->getExitCode() != 0 ) {
+			return true;
+		}
+
+		$lines = $result->getStdout();
 		$lines = array_map( 'trim', explode( "\n", $lines ) );
 		$candidatesByLocale = [];
 		$candidatesByLang = [];
-
 		foreach ( $lines as $line ) {
 			if ( $line === '' ) {
 				continue;
@@ -1108,41 +1116,18 @@ abstract class Installer {
 	}
 
 	/**
-	 * Convert a hex string representing a Unicode code point to that code point.
-	 * @param string $c
-	 * @return string|false
-	 */
-	protected function unicodeChar( $c ) {
-		$c = hexdec( $c );
-		if ( $c <= 0x7F ) {
-			return chr( $c );
-		} elseif ( $c <= 0x7FF ) {
-			return chr( 0xC0 | $c >> 6 ) . chr( 0x80 | $c & 0x3F );
-		} elseif ( $c <= 0xFFFF ) {
-			return chr( 0xE0 | $c >> 12 ) . chr( 0x80 | $c >> 6 & 0x3F ) .
-				chr( 0x80 | $c & 0x3F );
-		} elseif ( $c <= 0x10FFFF ) {
-			return chr( 0xF0 | $c >> 18 ) . chr( 0x80 | $c >> 12 & 0x3F ) .
-				chr( 0x80 | $c >> 6 & 0x3F ) .
-				chr( 0x80 | $c & 0x3F );
-		} else {
-			return false;
-		}
-	}
-
-	/**
 	 * Check the libicu version
 	 */
 	protected function envCheckLibicu() {
 		/**
 		 * This needs to be updated something that the latest libicu
 		 * will properly normalize.  This normalization was found at
-		 * http://www.unicode.org/versions/Unicode5.2.0/#Character_Additions
+		 * https://www.unicode.org/versions/Unicode5.2.0/#Character_Additions
 		 * Note that we use the hex representation to create the code
 		 * points in order to avoid any Unicode-destroying during transit.
 		 */
-		$not_normal_c = $this->unicodeChar( "FA6C" );
-		$normal_c = $this->unicodeChar( "242EE" );
+		$not_normal_c = "\u{FA6C}";
+		$normal_c = "\u{242EE}";
 
 		$useNormalizer = 'php';
 		$needsUpdate = false;
@@ -1203,13 +1188,13 @@ abstract class Installer {
 		$scriptTypes = [
 			'php' => [
 				"<?php echo 'ex' . 'ec';",
-				"#!/var/env php5\n<?php echo 'ex' . 'ec';",
+				"#!/var/env php\n<?php echo 'ex' . 'ec';",
 			],
 		];
 
 		// it would be good to check other popular languages here, but it'll be slow.
 
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 
 		foreach ( $scriptTypes as $ext => $contents ) {
 			foreach ( $contents as $source ) {
@@ -1228,14 +1213,14 @@ abstract class Installer {
 				unlink( $dir . $file );
 
 				if ( $text == 'exec' ) {
-					MediaWiki\restoreWarnings();
+					Wikimedia\restoreWarnings();
 
 					return $ext;
 				}
 			}
 		}
 
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		return false;
 	}
@@ -1305,7 +1290,15 @@ abstract class Installer {
 			if ( !is_dir( "$extDir/$file" ) ) {
 				continue;
 			}
-			if ( file_exists( "$extDir/$file/$jsonFile" ) || file_exists( "$extDir/$file/$file.php" ) ) {
+			$fullJsonFile = "$extDir/$file/$jsonFile";
+			$isJson = file_exists( $fullJsonFile );
+			$isPhp = false;
+			if ( !$isJson ) {
+				// Only fallback to PHP file if JSON doesn't exist
+				$fullPhpFile = "$extDir/$file/$file.php";
+				$isPhp = file_exists( $fullPhpFile );
+			}
+			if ( $isJson || $isPhp ) {
 				// Extension exists. Now see if there are screenshots
 				$exts[$file] = [];
 				if ( is_dir( "$extDir/$file/screenshots" ) ) {
@@ -1316,11 +1309,94 @@ abstract class Installer {
 
 				}
 			}
+			if ( $isJson ) {
+				$info = $this->readExtension( $fullJsonFile );
+				if ( $info === false ) {
+					continue;
+				}
+				$exts[$file] += $info;
+			}
 		}
 		closedir( $dh );
 		uksort( $exts, 'strnatcasecmp' );
 
 		return $exts;
+	}
+
+	/**
+	 * @param string $fullJsonFile
+	 * @param array $extDeps
+	 * @param array $skinDeps
+	 *
+	 * @return array|bool False if this extension can't be loaded
+	 */
+	private function readExtension( $fullJsonFile, $extDeps = [], $skinDeps = [] ) {
+		$load = [
+			$fullJsonFile => 1
+		];
+		if ( $extDeps ) {
+			$extDir = $this->getVar( 'IP' ) . '/extensions';
+			foreach ( $extDeps as $dep ) {
+				$fname = "$extDir/$dep/extension.json";
+				if ( !file_exists( $fname ) ) {
+					return false;
+				}
+				$load[$fname] = 1;
+			}
+		}
+		if ( $skinDeps ) {
+			$skinDir = $this->getVar( 'IP' ) . '/skins';
+			foreach ( $skinDeps as $dep ) {
+				$fname = "$skinDir/$dep/skin.json";
+				if ( !file_exists( $fname ) ) {
+					return false;
+				}
+				$load[$fname] = 1;
+			}
+		}
+		$registry = new ExtensionRegistry();
+		try {
+			$info = $registry->readFromQueue( $load );
+		} catch ( ExtensionDependencyError $e ) {
+			if ( $e->incompatibleCore || $e->incompatibleSkins
+				|| $e->incompatibleExtensions
+			) {
+				// If something is incompatible with a dependency, we have no real
+				// option besides skipping it
+				return false;
+			} elseif ( $e->missingExtensions || $e->missingSkins ) {
+				// There's an extension missing in the dependency tree,
+				// so add those to the dependency list and try again
+				return $this->readExtension(
+					$fullJsonFile,
+					array_merge( $extDeps, $e->missingExtensions ),
+					array_merge( $skinDeps, $e->missingSkins )
+				);
+			}
+			// Some other kind of dependency error?
+			return false;
+		}
+		$ret = [];
+		// The order of credits will be the order of $load,
+		// so the first extension is the one we want to load,
+		// everything else is a dependency
+		$i = 0;
+		foreach ( $info['credits'] as $name => $credit ) {
+			$i++;
+			if ( $i == 1 ) {
+				// Extension we want to load
+				continue;
+			}
+			$type = basename( $credit['path'] ) === 'skin.json' ? 'skins' : 'extensions';
+			$ret['requires'][$type][] = $credit['name'];
+		}
+		$credits = array_values( $info['credits'] )[0];
+		if ( isset( $credits['url'] ) ) {
+			$ret['url'] = $credits['url'];
+		}
+		$ret['type'] = $credits['type'];
+
+		return $ret;
 	}
 
 	/**
@@ -1349,6 +1425,10 @@ abstract class Installer {
 		global $IP;
 		$exts = $this->getVar( '_Extensions' );
 		$IP = $this->getVar( 'IP' );
+
+		// Marker for DatabaseUpdater::loadExtensions so we don't
+		// double load extensions
+		define( 'MW_EXTENSIONS_LOADED', true );
 
 		/**
 		 * We need to include DefaultSettings before including extensions to avoid
@@ -1517,21 +1597,9 @@ abstract class Installer {
 	protected function doGenerateKeys( $keys ) {
 		$status = Status::newGood();
 
-		$strong = true;
 		foreach ( $keys as $name => $length ) {
-			$secretKey = MWCryptRand::generateHex( $length, true );
-			if ( !MWCryptRand::wasStrong() ) {
-				$strong = false;
-			}
-
+			$secretKey = MWCryptRand::generateHex( $length );
 			$this->setVar( $name, $secretKey );
-		}
-
-		if ( !$strong ) {
-			$names = array_keys( $keys );
-			$names = preg_replace( '/^(.*)$/', '\$$1', $names );
-			global $wgLang;
-			$status->warning( 'config-insecure-keys', $wgLang->listToText( $names ), count( $names ) );
 		}
 
 		return $status;
@@ -1568,7 +1636,7 @@ abstract class Installer {
 			$user->saveSettings();
 
 			// Update user count
-			$ssUpdate = new SiteStatsUpdate( 0, 0, 0, 0, 1 );
+			$ssUpdate = SiteStatsUpdate::factory( [ 'users' => 1 ] );
 			$ssUpdate->doUpdate();
 		}
 		$status = Status::newGood();
@@ -1677,7 +1745,7 @@ abstract class Installer {
 		// implementation that won't stomp on PHP's cookies.
 		$GLOBALS['wgSessionProviders'] = [
 			[
-				'class' => 'InstallerSessionProvider',
+				'class' => InstallerSessionProvider::class,
 				'args' => [ [
 					'priority' => 1,
 				] ]
@@ -1704,8 +1772,8 @@ abstract class Installer {
 	 * Some long-running pages (Install, Upgrade) will want to do this
 	 */
 	protected function disableTimeLimit() {
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		set_time_limit( 0 );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 	}
 }

@@ -86,12 +86,16 @@ class CachedBagOStuff extends HashBagOStuff {
 		return $this->backend->deleteObjectsExpiringBefore( $date, $progressCallback );
 	}
 
+	public function makeKeyInternal( $keyspace, $args ) {
+		return $this->backend->makeKeyInternal( ...func_get_args() );
+	}
+
 	public function makeKey( $class, $component = null ) {
-		return call_user_func_array( [ $this->backend, __FUNCTION__ ], func_get_args() );
+		return $this->backend->makeKey( ...func_get_args() );
 	}
 
 	public function makeGlobalKey( $class, $component = null ) {
-		return call_user_func_array( [ $this->backend, __FUNCTION__ ], func_get_args() );
+		return $this->backend->makeGlobalKey( ...func_get_args() );
 	}
 
 	// These just call the backend (tested elsewhere)

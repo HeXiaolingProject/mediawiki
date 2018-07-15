@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Dec 22, 2010
- *
  * Copyright © 2010 Roan Kattouw "<Firstname>.<Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -53,7 +49,7 @@ class ApiQueryQueryPage extends ApiQueryGeneratorBase {
 	}
 
 	/**
-	 * @param ApiPageSet $resultPageSet
+	 * @param ApiPageSet|null $resultPageSet
 	 */
 	public function run( $resultPageSet = null ) {
 		$params = $this->extractRequestParams();

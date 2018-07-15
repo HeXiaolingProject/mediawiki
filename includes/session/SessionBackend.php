@@ -243,7 +243,7 @@ final class SessionBackend {
 
 			if ( $restart ) {
 				session_id( (string)$this->id );
-				\MediaWiki\quietCall( 'session_start' );
+				\Wikimedia\quietCall( 'session_start' );
 			}
 
 			$this->autosave();
@@ -457,7 +457,7 @@ final class SessionBackend {
 
 	/**
 	 * Set the "logged out" timestamp
-	 * @param int $ts
+	 * @param int|null $ts
 	 */
 	public function setLoggedOutTimestamp( $ts = null ) {
 		$ts = (int)$ts;
@@ -764,7 +764,7 @@ final class SessionBackend {
 						'session' => $this->id,
 				] );
 				session_id( (string)$this->id );
-				\MediaWiki\quietCall( 'session_start' );
+				\Wikimedia\quietCall( 'session_start' );
 			}
 		}
 	}

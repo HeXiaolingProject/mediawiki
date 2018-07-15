@@ -161,8 +161,8 @@ class MWExceptionHandler {
 	 *
 	 * @param int $level Error level raised
 	 * @param string $message
-	 * @param string $file
-	 * @param int $line
+	 * @param string|null $file
+	 * @param int|null $line
 	 * @return bool
 	 *
 	 * @see logError()
@@ -170,10 +170,10 @@ class MWExceptionHandler {
 	public static function handleError(
 		$level, $message, $file = null, $line = null
 	) {
+		global $wgPropagateErrors;
+
 		if ( in_array( $level, self::$fatalErrorTypes ) ) {
-			return call_user_func_array(
-				'MWExceptionHandler::handleFatalError', func_get_args()
-			);
+			return self::handleFatalError( ...func_get_args() );
 		}
 
 		// Map error constant to error name (reverse-engineer PHP error
@@ -213,9 +213,10 @@ class MWExceptionHandler {
 		$e = new ErrorException( "PHP $levelName: $message", 0, $level, $file, $line );
 		self::logError( $e, 'error', $severity );
 
-		// This handler is for logging only. Return false will instruct PHP
-		// to continue regular handling.
-		return false;
+		// If $wgPropagateErrors is true return false so PHP shows/logs the error normally.
+		// Ignore $wgPropagateErrors if the error should break execution, or track_errors is set
+		// (which means someone is counting on regular PHP error handling behavior).
+		return !( $wgPropagateErrors || $level == E_RECOVERABLE_ERROR || ini_get( 'track_errors' ) );
 	}
 
 	/**
@@ -230,12 +231,12 @@ class MWExceptionHandler {
 	 *
 	 * @since 1.25
 	 *
-	 * @param int $level Error level raised
-	 * @param string $message Error message
-	 * @param string $file File that error was raised in
-	 * @param int $line Line number error was raised at
-	 * @param array $context Active symbol table point of error
-	 * @param array $trace Backtrace at point of error (undocumented HHVM
+	 * @param int|null $level Error level raised
+	 * @param string|null $message Error message
+	 * @param string|null $file File that error was raised in
+	 * @param int|null $line Line number error was raised at
+	 * @param array|null $context Active symbol table point of error
+	 * @param array|null $trace Backtrace at point of error (undocumented HHVM
 	 *     feature)
 	 * @return bool Always returns false
 	 */
@@ -273,12 +274,21 @@ class MWExceptionHandler {
 			return false;
 		}
 
-		$msg = "[{exception_id}] PHP Fatal Error: {$message}";
+		$url = WebRequest::getGlobalRequestURL();
+		$msgParts = [
+			'[{exception_id}] {exception_url}   PHP Fatal Error',
+			( $line || $file ) ? ' from' : '',
+			$line ? " line $line" : '',
+			( $line && $file ) ? ' of' : '',
+			$file ? " $file" : '',
+			": $message",
+		];
+		$msg = implode( '', $msgParts );
 
 		// Look at message to see if this is a class not found failure
 		// HHVM: Class undefined: foo
 		// PHP5: Class 'foo' not found
-		if ( preg_match( "/Class (undefined: \w+|'\w+' not found)/", $msg ) ) {
+		if ( preg_match( "/Class (undefined: \w+|'\w+' not found)/", $message ) ) {
 			// phpcs:disable Generic.Files.LineLength
 			$msg = <<<TXT
 {$msg}
@@ -300,14 +310,15 @@ TXT;
 		$logger = LoggerFactory::getInstance( 'fatal' );
 		$logger->error( $msg, [
 			'fatal_exception' => [
-				'class' => 'ErrorException',
+				'class' => ErrorException::class,
 				'message' => "PHP Fatal Error: {$message}",
 				'code' => $level,
 				'file' => $file,
 				'line' => $line,
-				'trace' => static::redactTrace( $trace ),
+				'trace' => self::prettyPrintTrace( self::redactTrace( $trace ) ),
 			],
-			'exception_id' => wfRandomString( 8 ),
+			'exception_id' => WebRequest::getRequestId(),
+			'exception_url' => $url,
 			'caught_by' => self::CAUGHT_BY_HANDLER
 		] );
 
@@ -661,7 +672,7 @@ TXT;
 		$catcher = self::CAUGHT_BY_HANDLER;
 		// The set_error_handler callback is independent from error_reporting.
 		// Filter out unwanted errors manually (e.g. when
-		// MediaWiki\suppressWarnings is active).
+		// Wikimedia\suppressWarnings is active).
 		$suppressed = ( error_reporting() & $e->getSeverity() ) === 0;
 		if ( !$suppressed ) {
 			$logger = LoggerFactory::getInstance( $channel );

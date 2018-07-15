@@ -26,6 +26,8 @@
  * @file
  */
 
+use MediaWiki\Logger\LoggerFactory;
+
 /**
  * A simple method to retrieve the plain source of an article,
  * using "action=raw" in the GET request string.
@@ -59,20 +61,19 @@ class RawAction extends FormlessAction {
 			return; // Client cache fresh and headers sent, nothing more to do.
 		}
 
-		$gen = $request->getVal( 'gen' );
-		if ( $gen == 'css' || $gen == 'js' ) {
-			$this->gen = true;
-		}
-
 		$contentType = $this->getContentType();
 
 		$maxage = $request->getInt( 'maxage', $config->get( 'SquidMaxage' ) );
 		$smaxage = $request->getIntOrNull( 'smaxage' );
 		if ( $smaxage === null ) {
-			if ( $contentType == 'text/css' || $contentType == 'text/javascript' ) {
-				// CSS/JS raw content has its own CDN max age configuration.
-				// Note: Title::getCdnUrls() includes action=raw for css/js pages,
-				// so if using the canonical url, this will get HTCP purges.
+			if (
+				$contentType == 'text/css' ||
+				$contentType == 'application/json' ||
+				$contentType == 'text/javascript'
+			) {
+				// CSS/JSON/JS raw content has its own CDN max age configuration.
+				// Note: Title::getCdnUrls() includes action=raw for css/json/js
+				// pages, so if using the canonical url, this will get HTCP purges.
 				$smaxage = intval( $config->get( 'ForcedRawSMaxage' ) );
 			} else {
 				// No CDN cache for anything else
@@ -86,7 +87,6 @@ class RawAction extends FormlessAction {
 			$response->header( $this->getOutput()->getKeyHeader() );
 		}
 
-		$response->header( 'Content-type: ' . $contentType . '; charset=UTF-8' );
 		// Output may contain user-specific data;
 		// vary generated content for open sessions on private wikis
 		$privateCache = !User::isEveryoneAllowed( 'read' ) &&
@@ -97,6 +97,36 @@ class RawAction extends FormlessAction {
 		$response->header(
 			'Cache-Control: ' . $mode . ', s-maxage=' . $smaxage . ', max-age=' . $maxage
 		);
+
+		// In the event of user JS, don't allow loading a user JS/CSS/Json
+		// subpage that has no registered user associated with, as
+		// someone could register the account and take control of the
+		// JS/CSS/Json page.
+		$title = $this->getTitle();
+		if ( $title->isUserConfigPage() && $contentType !== 'text/x-wiki' ) {
+			// not using getRootText() as we want this to work
+			// even if subpages are disabled.
+			$rootPage = strtok( $title->getText(), '/' );
+			$userFromTitle = User::newFromName( $rootPage, 'usable' );
+			if ( !$userFromTitle || $userFromTitle->getId() === 0 ) {
+				$elevated = $this->getUser()->isAllowed( 'editinterface' );
+				$elevatedText = $elevated ? 'by elevated ' : '';
+				$log = LoggerFactory::getInstance( "security" );
+				$log->warning(
+					"Unsafe JS/CSS/Json $elevatedText" . "load - {user} loaded {title} with {ctype}",
+					[
+						'user' => $this->getUser()->getName(),
+						'title' => $title->getPrefixedDBKey(),
+						'ctype' => $contentType,
+						'elevated' => $elevated
+					]
+				);
+				$msg = wfMessage( 'unregistered-user-config' );
+				throw new HttpError( 403, $msg );
+			}
+		}
+
+		$response->header( 'Content-type: ' . $contentType . '; charset=UTF-8' );
 
 		$text = $this->getRawText();
 
@@ -166,7 +196,7 @@ class RawAction extends FormlessAction {
 					}
 
 					if ( $content === null || $content === false ) {
-						// section not found (or section not supported, e.g. for JS and CSS)
+						// section not found (or section not supported, e.g. for JS, JSON, and CSS)
 						$text = false;
 					} else {
 						$text = $content->getNativeData();
@@ -175,7 +205,7 @@ class RawAction extends FormlessAction {
 			}
 		}
 
-		if ( $text !== false && $text !== '' && $request->getVal( 'templates' ) === 'expand' ) {
+		if ( $text !== false && $text !== '' && $request->getRawVal( 'templates' ) === 'expand' ) {
 			$text = $wgParser->preprocess(
 				$text,
 				$title,
@@ -225,10 +255,14 @@ class RawAction extends FormlessAction {
 	 * @return string
 	 */
 	public function getContentType() {
-		$ctype = $this->getRequest()->getVal( 'ctype' );
+		// Use getRawVal instead of getVal because we only
+		// need to match against known strings, there is no
+		// storing of localised content or other user input.
+		$ctype = $this->getRequest()->getRawVal( 'ctype' );
 
 		if ( $ctype == '' ) {
-			$gen = $this->getRequest()->getVal( 'gen' );
+			// Legacy compatibilty
+			$gen = $this->getRequest()->getRawVal( 'gen' );
 			if ( $gen == 'js' ) {
 				$ctype = 'text/javascript';
 			} elseif ( $gen == 'css' ) {
@@ -240,6 +274,7 @@ class RawAction extends FormlessAction {
 			'text/x-wiki',
 			'text/javascript',
 			'text/css',
+			// FIXME: Should we still allow Zope editing? External editing feature was dropped
 			'application/x-zope-edit',
 			'application/json'
 		];

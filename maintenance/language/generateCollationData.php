@@ -67,11 +67,11 @@ class GenerateCollationData extends Maintenance {
 
 		// As of January 2013, these links work for all versions of Unicode
 		// between 5.1 and 6.2, inclusive.
-		$allkeysURL = "http://www.unicode.org/Public/UCA/<Unicode version>/allkeys.txt";
-		$ucdallURL = "http://www.unicode.org/Public/<Unicode version>/ucdxml/ucd.all.grouped.zip";
+		$allkeysURL = "https://www.unicode.org/Public/UCA/<Unicode version>/allkeys.txt";
+		$ucdallURL = "https://www.unicode.org/Public/<Unicode version>/ucdxml/ucd.all.grouped.zip";
 
 		if ( !$allkeysPresent || !$ucdallPresent ) {
-			$icuVersion = IcuCollation::getICUVersion();
+			$icuVersion = INTL_ICU_VERSION;
 			$unicodeVersion = IcuCollation::getUnicodeVersionForICU();
 
 			$error = "";
@@ -88,16 +88,7 @@ class GenerateCollationData extends Maintenance {
 			}
 
 			$versionKnown = false;
-			if ( !$icuVersion ) {
-				// Unknown version - either very old intl,
-				// or PHP < 5.3.7 which does not expose this information
-				$error .= "As MediaWiki could not determine the version of ICU library used by your PHP's "
-					. "intl extension it can't suggest which file version to download. "
-					. "This can be caused by running a very old version of intl or PHP < 5.3.7. "
-					. "If you are sure everything is all right, find out the ICU version "
-					. "by running phpinfo(), check what is the Unicode version it is using "
-					. "at http://site.icu-project.org/download, then try finding appropriate data file(s) at:";
-			} elseif ( version_compare( $icuVersion, "4.0", "<" ) ) {
+			if ( version_compare( $icuVersion, "4.0", "<" ) ) {
 				// Extra old version
 				$error .= "You are using outdated version of ICU ($icuVersion), intended for "
 					. ( $unicodeVersion ? "Unicode $unicodeVersion" : "an unknown version of Unicode" )
@@ -323,11 +314,6 @@ class GenerateCollationData extends Maintenance {
 			$headerChars[] = $char;
 			if ( $primaryCollator->compare( $char, $prevChar ) <= 0 ) {
 				$numOutOfOrder++;
-				/*
-				printf( "Out of order: U+%05X > U+%05X\n",
-					utf8ToCodepoint( $prevChar ),
-					utf8ToCodepoint( $char ) );
-				 */
 			}
 			$prevChar = $char;
 
@@ -464,5 +450,5 @@ class UcdXmlReader {
 	}
 }
 
-$maintClass = 'GenerateCollationData';
+$maintClass = GenerateCollationData::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

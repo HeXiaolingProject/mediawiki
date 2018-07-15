@@ -75,23 +75,25 @@ class Orphans extends Maintenance {
 	 */
 	private function checkOrphans( $fix ) {
 		$dbw = $this->getDB( DB_MASTER );
-		$commentStore = new CommentStore( 'rev_comment' );
+		$commentStore = CommentStore::getStore();
 
 		if ( $fix ) {
 			$this->lockTables( $dbw );
 		}
 
-		$commentQuery = $commentStore->getJoin();
+		$commentQuery = $commentStore->getJoin( 'rev_comment' );
+		$actorQuery = ActorMigration::newMigration()->getJoin( 'rev_user' );
 
 		$this->output( "Checking for orphan revision table entries... "
 			. "(this may take a while on a large wiki)\n" );
 		$result = $dbw->select(
-			[ 'revision', 'page' ] + $commentQuery['tables'],
-			[ 'rev_id', 'rev_page', 'rev_timestamp', 'rev_user_text' ] + $commentQuery['fields'],
+			[ 'revision', 'page' ] + $commentQuery['tables'] + $actorQuery['tables'],
+			[ 'rev_id', 'rev_page', 'rev_timestamp' ] + $commentQuery['fields'] + $actorQuery['fields'],
 			[ 'page_id' => null ],
 			__METHOD__,
 			[],
 			[ 'page' => [ 'LEFT JOIN', [ 'rev_page=page_id' ] ] ] + $commentQuery['joins']
+				+ $actorQuery['joins']
 		);
 		$orphans = $result->numRows();
 		if ( $orphans > 0 ) {
@@ -104,15 +106,22 @@ class Orphans extends Maintenance {
 			) );
 
 			foreach ( $result as $row ) {
-				$comment = $commentStore->getComment( $row )->text;
+				$comment = $commentStore->getComment( 'rev_comment', $row )->text;
 				if ( $comment !== '' ) {
-					$comment = '(' . $wgContLang->truncate( $comment, 40 ) . ')';
+					$comment = '(' . $wgContLang->truncateForVisual( $comment, 40 ) . ')';
 				}
-				$this->output( sprintf( "%10d %10d %14s %20s %s\n",
+				$rev_user_text = $wgContLang->truncateForVisual( $row->rev_user_text, 20 );
+				# pad $rev_user_text to 20 characters.  Note that this may
+				# yield poor results if $rev_user_text contains combining
+				# or half-width characters.  Alas.
+				if ( mb_strlen( $rev_user_text ) < 20 ) {
+					$rev_user_text = str_repeat( ' ', 20 - mb_strlen( $rev_user_text ) );
+				}
+				$this->output( sprintf( "%10d %10d %14s %s %s\n",
 					$row->rev_id,
 					$row->rev_page,
 					$row->rev_timestamp,
-					$wgContLang->truncate( $row->rev_user_text, 17 ),
+					$rev_user_text,
 					$comment ) );
 				if ( $fix ) {
 					$dbw->delete( 'revision', [ 'rev_id' => $row->rev_id ] );
@@ -252,5 +261,5 @@ class Orphans extends Maintenance {
 	}
 }
 
-$maintClass = "Orphans";
+$maintClass = Orphans::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

@@ -195,9 +195,14 @@ class InfoAction extends FormlessAction {
 	}
 
 	/**
-	 * Returns page information in an easily-manipulated format. Array keys are used so extensions
-	 * may add additional information in arbitrary positions. Array values are arrays with one
-	 * element to be rendered as a header, arrays with two elements to be rendered as a table row.
+	 * Returns an array of info groups (will be rendered as tables), keyed by group ID.
+	 * Group IDs are arbitrary and used so that extensions may add additional information in
+	 * arbitrary positions (and as message keys for section headers for the tables, prefixed
+	 * with 'pageinfo-').
+	 * Each info group is a non-associative array of info items (rendered as table rows).
+	 * Each info item is an array with two elements: the first describes the type of
+	 * information, the second the value for the current page. Both can be strings (will be
+	 * interpreted as raw HTML) or messages (will be interpreted as plain text and escaped).
 	 *
 	 * @return array
 	 */
@@ -213,21 +218,15 @@ class InfoAction extends FormlessAction {
 
 		$pageCounts = $this->pageCounts( $this->page );
 
-		$pageProperties = [];
 		$props = PageProps::getInstance()->getAllProperties( $title );
-		if ( isset( $props[$id] ) ) {
-			$pageProperties = $props[$id];
-		}
+		$pageProperties = $props[$id] ?? [];
 
 		// Basic information
 		$pageInfo = [];
 		$pageInfo['header-basic'] = [];
 
 		// Display title
-		$displayTitle = $title->getPrefixedText();
-		if ( isset( $pageProperties['displaytitle'] ) ) {
-			$displayTitle = $pageProperties['displaytitle'];
-		}
+		$displayTitle = $pageProperties['displaytitle'] ?? $title->getPrefixedText();
 
 		$pageInfo['header-basic'][] = [
 			$this->msg( 'pageinfo-display-title' ), $displayTitle
@@ -249,10 +248,7 @@ class InfoAction extends FormlessAction {
 		}
 
 		// Default sort key
-		$sortKey = $title->getCategorySortkey();
-		if ( isset( $pageProperties['defaultsort'] ) ) {
-			$sortKey = $pageProperties['defaultsort'];
-		}
+		$sortKey = $pageProperties['defaultsort'] ?? $title->getCategorySortkey();
 
 		$sortKey = htmlspecialchars( $sortKey );
 		$pageInfo['header-basic'][] = [ $this->msg( 'pageinfo-default-sort' ), $sortKey ];
@@ -441,7 +437,8 @@ class InfoAction extends FormlessAction {
 		if ( $title->inNamespace( NS_FILE ) ) {
 			$fileObj = wfFindFile( $title );
 			if ( $fileObj !== false ) {
-				$output = $fileObj->getSha1();
+				// Convert the base-36 sha1 value obtained from database to base-16
+				$output = Wikimedia\base_convert( $fileObj->getSha1(), 36, 16, 40 );
 				$pageInfo['header-basic'][] = [
 					$this->msg( 'pageinfo-file-hash' ),
 					$output
@@ -717,12 +714,37 @@ class InfoAction extends FormlessAction {
 			self::getCacheKey( $cache, $page->getTitle(), $page->getLatest() ),
 			WANObjectCache::TTL_WEEK,
 			function ( $oldValue, &$ttl, &$setOpts ) use ( $page, $config, $fname ) {
+				global $wgActorTableSchemaMigrationStage;
+
 				$title = $page->getTitle();
 				$id = $title->getArticleID();
 
 				$dbr = wfGetDB( DB_REPLICA );
 				$dbrWatchlist = wfGetDB( DB_REPLICA, 'watchlist' );
 				$setOpts += Database::getCacheSetOptions( $dbr, $dbrWatchlist );
+
+				if ( $wgActorTableSchemaMigrationStage === MIGRATION_NEW ) {
+					$tables = [ 'revision_actor_temp' ];
+					$field = 'revactor_actor';
+					$pageField = 'revactor_page';
+					$tsField = 'revactor_timestamp';
+					$joins = [];
+				} elseif ( $wgActorTableSchemaMigrationStage === MIGRATION_OLD ) {
+					$tables = [ 'revision' ];
+					$field = 'rev_user_text';
+					$pageField = 'rev_page';
+					$tsField = 'rev_timestamp';
+					$joins = [];
+				} else {
+					$tables = [ 'revision', 'revision_actor_temp', 'actor' ];
+					$field = 'COALESCE( actor_name, rev_user_text)';
+					$pageField = 'rev_page';
+					$tsField = 'rev_timestamp';
+					$joins = [
+						'revision_actor_temp' => [ 'LEFT JOIN', 'revactor_rev = rev_id' ],
+						'actor' => [ 'LEFT JOIN', 'revactor_actor = actor_id' ],
+					];
+				}
 
 				$watchedItemStore = MediaWikiServices::getInstance()->getWatchedItemStore();
 
@@ -751,10 +773,12 @@ class InfoAction extends FormlessAction {
 					$result['authors'] = 0;
 				} else {
 					$result['authors'] = (int)$dbr->selectField(
-						'revision',
-						'COUNT(DISTINCT rev_user_text)',
-						[ 'rev_page' => $id ],
-						$fname
+						$tables,
+						"COUNT(DISTINCT $field)",
+						[ $pageField => $id ],
+						$fname,
+						[],
+						$joins
 					);
 				}
 
@@ -775,13 +799,15 @@ class InfoAction extends FormlessAction {
 
 				// Recent number of distinct authors
 				$result['recent_authors'] = (int)$dbr->selectField(
-					'revision',
-					'COUNT(DISTINCT rev_user_text)',
+					$tables,
+					"COUNT(DISTINCT $field)",
 					[
-						'rev_page' => $id,
-						"rev_timestamp >= " . $dbr->addQuotes( $threshold )
+						$pageField => $id,
+						"$tsField >= " . $dbr->addQuotes( $threshold )
 					],
-					$fname
+					$fname,
+					[],
+					$joins
 				);
 
 				// Subpages (if enabled)

@@ -1,5 +1,7 @@
 <?php
 
+use MediaWiki\MediaWikiServices;
+
 /**
  * Tests for the DBSiteStore class.
  *
@@ -37,7 +39,8 @@ class DBSiteStoreTest extends MediaWikiTestCase {
 	private function newDBSiteStore() {
 		// NOTE: Use the real DB load balancer for now. Eventually, the test framework should
 		// provide a LoadBalancer that is safe to use in unit tests.
-		return new DBSiteStore( wfGetLB() );
+		$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
+		return new DBSiteStore( $lb );
 	}
 
 	/**
@@ -51,13 +54,13 @@ class DBSiteStoreTest extends MediaWikiTestCase {
 
 		$sites = $store->getSites();
 
-		$this->assertInstanceOf( 'SiteList', $sites );
+		$this->assertInstanceOf( SiteList::class, $sites );
 
 		/**
 		 * @var Site $site
 		 */
 		foreach ( $sites as $site ) {
-			$this->assertInstanceOf( 'Site', $site );
+			$this->assertInstanceOf( Site::class, $site );
 		}
 
 		foreach ( $expectedSites as $site ) {
@@ -88,13 +91,13 @@ class DBSiteStoreTest extends MediaWikiTestCase {
 		$this->assertTrue( $store->saveSites( $sites ) );
 
 		$site = $store->getSite( 'ertrywuutr' );
-		$this->assertInstanceOf( 'Site', $site );
+		$this->assertInstanceOf( Site::class, $site );
 		$this->assertEquals( 'en', $site->getLanguageCode() );
 		$this->assertTrue( is_int( $site->getInternalId() ) );
 		$this->assertTrue( $site->getInternalId() >= 0 );
 
 		$site = $store->getSite( 'sdfhxujgkfpth' );
-		$this->assertInstanceOf( 'Site', $site );
+		$this->assertInstanceOf( Site::class, $site );
 		$this->assertEquals( 'nl', $site->getLanguageCode() );
 		$this->assertTrue( is_int( $site->getInternalId() ) );
 		$this->assertTrue( $site->getInternalId() >= 0 );

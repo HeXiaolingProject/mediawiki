@@ -227,6 +227,7 @@ class GitInfo {
 			$date = false;
 			if ( is_file( $wgGitBin ) &&
 				is_executable( $wgGitBin ) &&
+				!Shell::isDisabled() &&
 				$this->getHead() !== false
 			) {
 				$cmd = [
@@ -306,9 +307,9 @@ class GitInfo {
 			$config = "{$this->basedir}/config";
 			$url = false;
 			if ( is_readable( $config ) ) {
-				MediaWiki\suppressWarnings();
+				Wikimedia\suppressWarnings();
 				$configArray = parse_ini_file( $config, true );
-				MediaWiki\restoreWarnings();
+				Wikimedia\restoreWarnings();
 				$remote = false;
 
 				// Use the "origin" remote repo if available or any other repo if not.

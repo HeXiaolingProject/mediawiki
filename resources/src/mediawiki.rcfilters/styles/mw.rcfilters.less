@@ -5,7 +5,9 @@
 @rcfilters-spinner-size: 12px;
 @rcfilters-head-min-height: 210px;
 @rcfilters-head-margin-bottom: 20px;
-@rcfilters-wl-head-min-height: 300px;
+@rcfilters-wl-head-min-height: 295px;
+@rcfilters-head-min-height-collapsed: 130px;
+@rcfilters-wl-head-min-height-collapsed: 220px;
 
 // Corrections for the standard special page
 .client-js {
@@ -22,12 +24,26 @@
 	// On the watchlist, reserve a bit more
 	.mw-special-Watchlist .rcfilters-head {
 		min-height: @rcfilters-wl-head-min-height;
+
+	}
+
+	.mw-rcfilters-collapsed {
+		.rcfilters-head {
+			min-height: @rcfilters-head-min-height-collapsed;
+		}
+
+		// On the watchlist, reserve a bit more
+		&.mw-special-Watchlist .rcfilters-head {
+			min-height: @rcfilters-wl-head-min-height-collapsed;
+		}
 	}
 
 	.mw-recentchanges-toplinks {
 		padding-left: 0.5em;
 
 		&:not( .mw-recentchanges-toplinks-collapsed ) {
+			margin-top: -1px; // Make up for `border` to prevent link movement
+			margin-left: -1px;
 			margin-bottom: 0.5em;
 			border: 1px solid @colorGray12; // Same as the legend
 			padding: 0 0.5em 0.5em 0.5em;
@@ -67,6 +83,10 @@
 		}
 	}
 
+	.mw-rcfilters-ui-highlights {
+		display: none;
+	}
+
 	.mw-changeslist {
 		// Reserve space for the highlight circles
 		ul,
@@ -75,10 +95,12 @@
 		}
 	}
 
-	// Temporarily hide any specific 'no result' message while we load rcfilters.
-	.mw-changeslist-empty,
-	.mw-changeslist-timeout,
-	.mw-changeslist-notargetpage {
+	// Temporarily hide the empty results section while we load rcfilters.
+	.mw-changeslist-empty {
+		display: none;
+	}
+
+	.errorbox {
 		display: none;
 	}
 
@@ -119,12 +141,12 @@
 	body:not( .mw-rcfilters-ui-initialized ) .rcfilters-spinner {
 		display: block;
 		// When initializing, display the spinner on top of the area where the UI will appear
-		margin-top: -( @rcfilters-head-min-height + @rcfilters-head-margin-bottom ) / 2;
+		margin-top: -( @rcfilters-head-min-height + @rcfilters-head-margin-bottom ) / 1.5;
 	}
 	body.mw-rcfilters-ui-loading .rcfilters-spinner {
 		display: block;
 		// When loading new results, display the spinner on top of the results area
-		margin-top: 2em;
+		margin-top: -( @rcfilters-head-min-height + @rcfilters-head-margin-bottom ) / 8;
 	}
 
 	#contentSub,
@@ -132,10 +154,21 @@
 		display: none;
 	}
 
+	// Why does rcfilters have a copy of this?
+	// TODO: Remove per T195256.
+	#jump-to-nav {
+		margin-top: -0.5em;
+		margin-bottom: 0.5em;
+	}
+
 	// Make the watchlist-details message display while loading, but make it not take up any
 	// space. This makes the min-height trick work better.
 	.watchlistDetails {
 		float: left;
+		// The 20em should match the min-width we are setting up
+		// for the .mw-rcfilters-ui-watchlistTopSectionWidget-editWatchlistButton
+		// in mw.rcfilters.ui.WatchlistTopSectionWidget.less
+		width: ~'calc( 100% - 20em )';
 	}
 }
 

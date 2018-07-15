@@ -5,6 +5,7 @@
  * @license The MIT License (MIT); see LICENSE.txt
  */
 ( function ( $, mw ) {
+	var hasOwn = Object.prototype.hasOwnProperty;
 
 	/**
 	 * Mixin for title widgets
@@ -25,8 +26,8 @@
 	 * @cfg {boolean} [showMissing=true] Show missing pages
 	 * @cfg {boolean} [addQueryInput=true] Add exact user's input query to results
 	 * @cfg {boolean} [excludeCurrentPage] Exclude the current page from suggestions
-	 * @cfg {boolean} [validateTitle=true] Whether the input must be a valid title (if set to true,
-	 *  the widget will marks itself red for invalid inputs, including an empty query).
+	 * @cfg {boolean} [validateTitle=true] Whether the input must be a valid title
+	 * @cfg {boolean} [required=false] Whether the input must not be empty
 	 * @cfg {Object} [cache] Result cache which implements a 'set' method, taking keyed values as an argument
 	 * @cfg {mw.Api} [api] API object to use, creates a default mw.Api instance if not specified
 	 */
@@ -101,7 +102,7 @@
 		var api = this.getApi(),
 			cache = this.constructor.static.interwikiPrefixesPromiseCache,
 			key = api.defaults.ajax.url;
-		if ( !cache.hasOwnProperty( key ) ) {
+		if ( !Object.prototype.hasOwnProperty.call( cache, key ) ) {
 			cache[ key ] = api.get( {
 				action: 'query',
 				meta: 'siteinfo',
@@ -191,8 +192,7 @@
 			params.pilimit = this.limit;
 		}
 		if ( this.showDescriptions ) {
-			params.prop.push( 'pageterms' );
-			params.wbptterms = 'description';
+			params.prop.push( 'description' );
 		}
 		return params;
 	};
@@ -242,7 +242,7 @@
 				redirect: suggestionPage.redirect !== undefined,
 				disambiguation: OO.getProp( suggestionPage, 'pageprops', 'disambiguation' ) !== undefined,
 				imageUrl: OO.getProp( suggestionPage, 'thumbnail', 'source' ),
-				description: OO.getProp( suggestionPage, 'terms', 'description' ),
+				description: suggestionPage.description,
 				// Sort index
 				index: suggestionPage.index,
 				originalData: suggestionPage
@@ -254,7 +254,7 @@
 				titles.push( suggestionPage.title );
 			}
 
-			redirects = redirectsTo[ suggestionPage.title ] || [];
+			redirects = hasOwn.call( redirectsTo, suggestionPage.title ) ? redirectsTo[ suggestionPage.title ] : [];
 			for ( i = 0, len = redirects.length; i < len; i++ ) {
 				pageData[ redirects[ i ] ] = {
 					missing: false,
@@ -278,7 +278,7 @@
 		// mismatch where normalisation would make them matching (T50476)
 
 		pageExistsExact = (
-			Object.prototype.hasOwnProperty.call( pageData, this.getQueryValue() ) &&
+			hasOwn.call( pageData, this.getQueryValue() ) &&
 			(
 				!pageData[ this.getQueryValue() ].missing ||
 				pageData[ this.getQueryValue() ].known
@@ -286,7 +286,7 @@
 		);
 		pageExists = pageExistsExact || (
 			titleObj &&
-			Object.prototype.hasOwnProperty.call( pageData, titleObj.getPrefixedText() ) &&
+			hasOwn.call( pageData, titleObj.getPrefixedText() ) &&
 			(
 				!pageData[ titleObj.getPrefixedText() ].missing ||
 				pageData[ titleObj.getPrefixedText() ].known
@@ -303,7 +303,7 @@
 		}
 
 		for ( i = 0, len = titles.length; i < len; i++ ) {
-			page = pageData[ titles[ i ] ] || {};
+			page = hasOwn.call( pageData, titles[ i ] ) ? pageData[ titles[ i ] ] : {};
 			items.push( this.createOptionWidget( this.getOptionWidgetData( titles[ i ], page ) ) );
 		}
 
@@ -369,7 +369,13 @@
 	 * @return {boolean} The query is valid
 	 */
 	mw.widgets.TitleWidget.prototype.isQueryValid = function () {
-		return this.validateTitle ? !!this.getMWTitle() : true;
+		if ( !this.validateTitle ) {
+			return true;
+		}
+		if ( !this.required && this.getQueryValue() === '' ) {
+			return true;
+		}
+		return !!this.getMWTitle();
 	};
 
 }( jQuery, mediaWiki ) );

@@ -19,7 +19,7 @@
  *
  * @file
  * @author Niklas Laxström
- * @license http://www.gnu.org/copyleft/gpl.html GNU General Public License 2.0 or later
+ * @license GPL-2.0-or-later
  * @since 1.19
  */
 use MediaWiki\Linker\LinkRenderer;
@@ -108,6 +108,12 @@ class LogFormatter {
 	 */
 	private $linkRenderer;
 
+	/**
+	 * @see LogFormatter::getMessageParameters
+	 * @var array
+	 */
+	protected $parsedParameters;
+
 	protected function __construct( LogEntry $entry ) {
 		$this->entry = $entry;
 		$this->context = RequestContext::getMain();
@@ -193,7 +199,7 @@ class LogFormatter {
 	}
 
 	/**
-	 * Even uglier hack to maintain backwards compatibilty with IRC bots
+	 * Even uglier hack to maintain backwards compatibility with IRC bots
 	 * (T36508).
 	 * @see getActionText()
 	 * @return string Text
@@ -214,7 +220,7 @@ class LogFormatter {
 	}
 
 	/**
-	 * Even uglier hack to maintain backwards compatibilty with IRC bots
+	 * Even uglier hack to maintain backwards compatibility with IRC bots
 	 * (T36508).
 	 * @see getActionText()
 	 * @return string Text
@@ -371,7 +377,7 @@ class LogFormatter {
 						// new key (5::duration/6::flags) or old key (0/optional 1)
 						if ( $entry->isLegacy() ) {
 							$rawDuration = $parameters[0];
-							$rawFlags = isset( $parameters[1] ) ? $parameters[1] : '';
+							$rawFlags = $parameters[1] ?? '';
 						} else {
 							$rawDuration = $parameters['5::duration'];
 							$rawFlags = $parameters['6::flags'];
@@ -633,7 +639,7 @@ class LogFormatter {
 	/**
 	 * Helper to make a link to the page, taking the plaintext
 	 * value in consideration.
-	 * @param Title $title The page
+	 * @param Title|null $title The page
 	 * @param array $parameters Query parameters
 	 * @param string|null $html Linktext of the link as raw html
 	 * @throws MWException

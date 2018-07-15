@@ -1,6 +1,8 @@
 <?php
 namespace MediaWiki;
 
+use ActorMigration;
+use CommentStore;
 use Config;
 use ConfigFactory;
 use CryptHKDF;
@@ -10,11 +12,17 @@ use GenderCache;
 use GlobalVarConfig;
 use Hooks;
 use IBufferingStatsdDataFactory;
+use MediaWiki\Http\HttpRequestFactory;
 use MediaWiki\Preferences\PreferencesFactory;
 use MediaWiki\Shell\CommandFactory;
 use MediaWiki\Storage\BlobStore;
 use MediaWiki\Storage\BlobStoreFactory;
+use MediaWiki\Storage\NameTableStore;
+use MediaWiki\Storage\RevisionFactory;
+use MediaWiki\Storage\RevisionLookup;
 use MediaWiki\Storage\RevisionStore;
+use OldRevisionImporter;
+use UploadRevisionImporter;
 use Wikimedia\Rdbms\LBFactory;
 use LinkCache;
 use Wikimedia\Rdbms\LoadBalancer;
@@ -459,6 +467,14 @@ class MediaWikiServices extends ServiceContainer {
 	}
 
 	/**
+	 * @since 1.32
+	 * @return IBufferingStatsdDataFactory
+	 */
+	public function getPerDbNameStatsdDataFactory() {
+		return $this->getService( 'PerDbNameStatsdDataFactory' );
+	}
+
+	/**
 	 * @since 1.27
 	 * @return EventRelayerGroup
 	 */
@@ -533,6 +549,7 @@ class MediaWikiServices extends ServiceContainer {
 
 	/**
 	 * @since 1.28
+	 * @deprecated since 1.32, use random_bytes()/random_int()
 	 * @return CryptRand
 	 */
 	public function getCryptRand() {
@@ -687,6 +704,30 @@ class MediaWikiServices extends ServiceContainer {
 	}
 
 	/**
+	 * @since 1.31
+	 * @return \UploadRevisionImporter
+	 */
+	public function getWikiRevisionUploadImporter() {
+		return $this->getService( 'UploadRevisionImporter' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return \OldRevisionImporter
+	 */
+	public function getWikiRevisionOldRevisionImporter() {
+		return $this->getService( 'OldRevisionImporter' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return \OldRevisionImporter
+	 */
+	public function getWikiRevisionOldRevisionImporterNoUpdates() {
+		return $this->getService( 'WikiRevisionOldRevisionImporterNoUpdates' );
+	}
+
+	/**
 	 * @since 1.30
 	 * @return CommandFactory
 	 */
@@ -728,10 +769,90 @@ class MediaWikiServices extends ServiceContainer {
 
 	/**
 	 * @since 1.31
+	 * @return RevisionLookup
+	 */
+	public function getRevisionLookup() {
+		return $this->getService( 'RevisionLookup' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return RevisionFactory
+	 */
+	public function getRevisionFactory() {
+		return $this->getService( 'RevisionFactory' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return NameTableStore
+	 */
+	public function getContentModelStore() {
+		return $this->getService( 'ContentModelStore' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return NameTableStore
+	 */
+	public function getSlotRoleStore() {
+		return $this->getService( 'SlotRoleStore' );
+	}
+
+	/**
+	 * @since 1.32
+	 * @return NameTableStore
+	 */
+	public function getChangeTagDefStore() {
+		return $this->getService( 'ChangeTagDefStore' );
+	}
+
+	/**
+	 * @since 1.31
 	 * @return PreferencesFactory
 	 */
 	public function getPreferencesFactory() {
 		return $this->getService( 'PreferencesFactory' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return HttpRequestFactory
+	 */
+	public function getHttpRequestFactory() {
+		return $this->getService( 'HttpRequestFactory' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return CommentStore
+	 */
+	public function getCommentStore() {
+		return $this->getService( 'CommentStore' );
+	}
+
+	/**
+	 * @since 1.31
+	 * @return ActorMigration
+	 */
+	public function getActorMigration() {
+		return $this->getService( 'ActorMigration' );
+	}
+
+	/**
+	 * @since 1.32
+	 * @return UploadRevisionImporter
+	 */
+	public function getUploadRevisionImporter() {
+		return $this->getService( 'UploadRevisionImporter' );
+	}
+
+	/**
+	 * @since 1.32
+	 * @return OldRevisionImporter
+	 */
+	public function getOldRevisionImporter() {
+		return $this->getService( 'OldRevisionImporter' );
 	}
 
 	///////////////////////////////////////////////////////////////////////////

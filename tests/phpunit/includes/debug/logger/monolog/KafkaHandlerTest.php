@@ -158,13 +158,14 @@ class KafkaHandlerTest extends MediaWikiTestCase {
 			->method( 'send' )
 			->will( $this->returnValue( true ) );
 		// evil hax
-		TestingAccessWrapper::newFromObject( $mockMethod )->matcher->parametersMatcher =
+		$matcher = TestingAccessWrapper::newFromObject( $mockMethod )->matcher;
+		TestingAccessWrapper::newFromObject( $matcher )->parametersMatcher =
 			new \PHPUnit_Framework_MockObject_Matcher_ConsecutiveParameters( [
 				[ $this->anything(), $this->anything(), [ 'words' ] ],
 				[ $this->anything(), $this->anything(), [ 'lines' ] ]
 			] );
 
-		$formatter = $this->createMock( 'Monolog\Formatter\FormatterInterface' );
+		$formatter = $this->createMock( \Monolog\Formatter\FormatterInterface::class );
 		$formatter->expects( $this->any() )
 			->method( 'format' )
 			->will( $this->onConsecutiveCalls( 'words', null, 'lines' ) );
@@ -195,7 +196,7 @@ class KafkaHandlerTest extends MediaWikiTestCase {
 			->method( 'send' )
 			->will( $this->returnValue( true ) );
 
-		$formatter = $this->createMock( 'Monolog\Formatter\FormatterInterface' );
+		$formatter = $this->createMock( \Monolog\Formatter\FormatterInterface::class );
 		$formatter->expects( $this->any() )
 			->method( 'format' )
 			->will( $this->onConsecutiveCalls( 'words', null, 'lines' ) );

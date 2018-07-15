@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Sep 4, 2007
- *
  * Copyright © 2007 Roan Kattouw "<Firstname>.<Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -128,8 +124,8 @@ class ApiBlock extends ApiBase {
 			$res['id'] = $block->getId();
 		} else {
 			# should be unreachable
-			$res['expiry'] = '';
-			$res['id'] = '';
+			$res['expiry'] = ''; // @codeCoverageIgnore
+			$res['id'] = ''; // @codeCoverageIgnore
 		}
 
 		$res['reason'] = $params['reason'];

@@ -18,6 +18,9 @@
  * @file
  */
 
+use Wikimedia\WrappedString;
+use Wikimedia\WrappedStringList;
+
 /**
  * New base template for a skin's template extended from QuickTemplate
  * this class features helper methods that provide common ways of interacting
@@ -33,7 +36,7 @@ abstract class BaseTemplate extends QuickTemplate {
 	 * @return Message
 	 */
 	public function getMsg( $name /* ... */ ) {
-		return call_user_func_array( [ $this->getSkin(), 'msg' ], func_get_args() );
+		return $this->getSkin()->msg( ...func_get_args() );
 	}
 
 	function msg( $str ) {
@@ -98,14 +101,7 @@ abstract class BaseTemplate extends QuickTemplate {
 		}
 		if ( isset( $this->data['nav_urls']['permalink'] ) && $this->data['nav_urls']['permalink'] ) {
 			$toolbox['permalink'] = $this->data['nav_urls']['permalink'];
-			if ( $toolbox['permalink']['href'] === '' ) {
-				unset( $toolbox['permalink']['href'] );
-				$toolbox['ispermalink']['tooltiponly'] = true;
-				$toolbox['ispermalink']['id'] = 't-ispermalink';
-				$toolbox['ispermalink']['msg'] = 'permalink';
-			} else {
-				$toolbox['permalink']['id'] = 't-permalink';
-			}
+			$toolbox['permalink']['id'] = 't-permalink';
 		}
 		if ( isset( $this->data['nav_urls']['info'] ) && $this->data['nav_urls']['info'] ) {
 			$toolbox['info'] = $this->data['nav_urls']['info'];
@@ -370,7 +366,7 @@ abstract class BaseTemplate extends QuickTemplate {
 		if ( isset( $item['text'] ) ) {
 			$text = $item['text'];
 		} else {
-			$text = $this->translator->translate( isset( $item['msg'] ) ? $item['msg'] : $key );
+			$text = wfMessage( $item['msg'] ?? $key )->text();
 		}
 
 		$html = htmlspecialchars( $text );
@@ -382,9 +378,7 @@ abstract class BaseTemplate extends QuickTemplate {
 			}
 			while ( count( $wrapper ) > 0 ) {
 				$element = array_pop( $wrapper );
-				$html = Html::rawElement( $element['tag'], isset( $element['attributes'] )
-					? $element['attributes']
-					: null, $html );
+				$html = Html::rawElement( $element['tag'], $element['attributes'] ?? null, $html );
 			}
 		}
 
@@ -521,7 +515,7 @@ abstract class BaseTemplate extends QuickTemplate {
 		if ( isset( $item['itemtitle'] ) ) {
 			$attrs['title'] = $item['itemtitle'];
 		}
-		return Html::rawElement( isset( $options['tag'] ) ? $options['tag'] : 'li', $attrs, $html );
+		return Html::rawElement( $options['tag'] ?? 'li', $attrs, $html );
 	}
 
 	function makeSearchInput( $attrs = [] ) {
@@ -541,8 +535,7 @@ abstract class BaseTemplate extends QuickTemplate {
 				$realAttrs = [
 					'type' => 'submit',
 					'name' => $mode,
-					'value' => $this->translator->translate(
-						$mode == 'go' ? 'searcharticle' : 'searchbutton' ),
+					'value' => wfMessage( $mode == 'go' ? 'searcharticle' : 'searchbutton' )->text(),
 				];
 				$realAttrs = array_merge(
 					$realAttrs,
@@ -566,11 +559,9 @@ abstract class BaseTemplate extends QuickTemplate {
 				unset( $buttonAttrs['height'] );
 				$imgAttrs = [
 					'src' => $attrs['src'],
-					'alt' => isset( $attrs['alt'] )
-						? $attrs['alt']
-						: $this->translator->translate( 'searchbutton' ),
-					'width' => isset( $attrs['width'] ) ? $attrs['width'] : null,
-					'height' => isset( $attrs['height'] ) ? $attrs['height'] : null,
+					'alt' => $attrs['alt'] ?? wfMessage( 'searchbutton' )->text(),
+					'width' => $attrs['width'] ?? null,
+					'height' => $attrs['height'] ?? null,
 				];
 				return Html::rawElement( 'button', $buttonAttrs, Html::element( 'img', $imgAttrs ) );
 			default:
@@ -584,7 +575,7 @@ abstract class BaseTemplate extends QuickTemplate {
 	 * If you pass "flat" as an option then the returned array will be a flat array
 	 * of footer icons instead of a key/value array of footerlinks arrays broken
 	 * up into categories.
-	 * @param string $option
+	 * @param string|null $option
 	 * @return array|mixed
 	 */
 	function getFooterLinks( $option = null ) {
@@ -606,10 +597,7 @@ abstract class BaseTemplate extends QuickTemplate {
 
 		if ( $option == 'flat' ) {
 			// fold footerlinks into a single array using a bit of trickery
-			$validFooterLinks = call_user_func_array(
-				'array_merge',
-				array_values( $validFooterLinks )
-			);
+			$validFooterLinks = array_merge( ...array_values( $validFooterLinks ) );
 		}
 
 		return $validFooterLinks;
@@ -624,7 +612,7 @@ abstract class BaseTemplate extends QuickTemplate {
 	 * in the list of footer icons. This is mostly useful for skins which only
 	 * display the text from footericons instead of the images and don't want a
 	 * duplicate copyright statement because footerlinks already rendered one.
-	 * @param string $option
+	 * @param string|null $option
 	 * @return array
 	 */
 	function getFooterIcons( $option = null ) {
@@ -762,14 +750,14 @@ abstract class BaseTemplate extends QuickTemplate {
 	 * debug stuff. This should be called right before outputting the closing
 	 * body and html tags.
 	 *
-	 * @return string
+	 * @return string|WrappedStringList HTML
 	 * @since 1.29
 	 */
-	function getTrail() {
-		$html = MWDebug::getDebugHTML( $this->getSkin()->getContext() );
-		$html .= $this->get( 'bottomscripts' );
-		$html .= $this->get( 'reporttime' );
-
-		return $html;
+	public function getTrail() {
+		return WrappedString::join( "\n", [
+			MWDebug::getDebugHTML( $this->getSkin()->getContext() ),
+			$this->get( 'bottomscripts' ),
+			$this->get( 'reporttime' )
+		] );
 	}
 }

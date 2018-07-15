@@ -581,7 +581,7 @@ class CategoryViewer extends ContextSource {
 
 		foreach ( $colContents as $char => $articles ) {
 			# Change space to non-breaking space to keep headers aligned
-			$h3char = $char === ' ' ? '&#160;' : htmlspecialchars( $char );
+			$h3char = $char === ' ' ? "\u{00A0}" : htmlspecialchars( $char );
 
 			$ret .= '<div class="mw-category-group"><h3>' . $h3char;
 			$ret .= "</h3>\n";
@@ -735,11 +735,7 @@ class CategoryViewer extends ContextSource {
 			$totalcnt = $dbcnt;
 		} elseif ( $rescnt < $this->limit && !$fromOrUntil ) {
 			// Case 2: not sane, but salvageable.  Use the number of results.
-			// Since there are fewer than 200, we can also take this opportunity
-			// to refresh the incorrect category table entry -- which should be
-			// quick due to the small number of entries.
 			$totalcnt = $rescnt;
-			DeferredUpdates::addCallableUpdate( [ $this->cat, 'refreshCounts' ] );
 		} else {
 			// Case 3: hopeless.  Don't give a total count at all.
 			// Messages: category-subcat-count-limited, category-article-count-limited,

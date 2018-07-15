@@ -24,6 +24,7 @@
 
 use MediaWiki\Logger\LegacyLogger;
 use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\IDatabase;
 
 $optionsWithArgs = RecompressTracked::getOptionsWithArgs();
 require __DIR__ . '/../commandLine.inc';
@@ -114,8 +115,8 @@ class RecompressTracked {
 			$GLOBALS['wgDebugLogPrefix'] = "RCT {$this->replicaId}: ";
 		}
 		$this->pageBlobClass = function_exists( 'xdiff_string_bdiff' ) ?
-			'DiffHistoryBlob' : 'ConcatenatedGzipHistoryBlob';
-		$this->orphanBlobClass = 'ConcatenatedGzipHistoryBlob';
+			DiffHistoryBlob::class : ConcatenatedGzipHistoryBlob::class;
+		$this->orphanBlobClass = ConcatenatedGzipHistoryBlob::class;
 	}
 
 	function debug( $msg ) {
@@ -226,7 +227,7 @@ class RecompressTracked {
 		}
 		$cmd .= ' --child' .
 			' --wiki ' . wfEscapeShellArg( wfWikiID() ) .
-			' ' . call_user_func_array( 'wfEscapeShellArg', $this->destClusters );
+			' ' . wfEscapeShellArg( ...$this->destClusters );
 
 		$this->replicaPipes = $this->replicaProcs = [];
 		for ( $i = 0; $i < $this->numProcs; $i++ ) {
@@ -236,9 +237,9 @@ class RecompressTracked {
 				[ 'file', 'php://stdout', 'w' ],
 				[ 'file', 'php://stderr', 'w' ]
 			];
-			MediaWiki\suppressWarnings();
+			Wikimedia\suppressWarnings();
 			$proc = proc_open( "$cmd --replica-id $i", $spec, $pipes );
-			MediaWiki\restoreWarnings();
+			Wikimedia\restoreWarnings();
 			if ( !$proc ) {
 				$this->critical( "Error opening replica DB process: $cmd" );
 				exit( 1 );
@@ -426,12 +427,12 @@ class RecompressTracked {
 				$args = array_slice( $ids, 0, $this->orphanBatchSize );
 				$ids = array_slice( $ids, $this->orphanBatchSize );
 				array_unshift( $args, 'doOrphanList' );
-				call_user_func_array( [ $this, 'dispatch' ], $args );
+				$this->dispatch( ...$args );
 			}
 			if ( count( $ids ) ) {
 				$args = $ids;
 				array_unshift( $args, 'doOrphanList' );
-				call_user_func_array( [ $this, 'dispatch' ], $args );
+				$this->dispatch( ...$args );
 			}
 
 			$this->report( 'orphans', $i, $numOrphans );
@@ -640,10 +641,11 @@ class RecompressTracked {
 	/**
 	 * Gets a DB master connection for the given external cluster name
 	 * @param string $cluster
-	 * @return Database
+	 * @return IDatabase
 	 */
 	function getExtDB( $cluster ) {
-		$lb = wfGetLBFactory()->getExternalLB( $cluster );
+		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+		$lb = $lbFactory->getExternalLB( $cluster );
 
 		return $lb->getConnection( DB_MASTER );
 	}

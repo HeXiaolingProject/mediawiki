@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on January 1, 2017
- *
  * Copyright © 2017 Justin Du "<justin.d128@gmail.com>"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -84,7 +80,7 @@ class ApiSetPageLanguage extends ApiBase {
 			$this,
 			$titleObj,
 			$params['lang'],
-			$params['reason'] === null ? '' : $params['reason'],
+			$params['reason'] ?? '',
 			$params['tags'] ?: []
 		);
 

@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Sep 25, 2006
- *
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -91,7 +87,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 			}
 
 			if ( $this->fld_comment || $this->fld_parsedcomment ) {
-				$this->commentStore = new CommentStore( 'rc_comment' );
+				$this->commentStore = CommentStore::getStore();
 			}
 		}
 
@@ -237,6 +233,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		}
 		if ( $this->fld_patrol ) {
 			$includeFields[] = WatchedItemQueryService::INCLUDE_PATROL_INFO;
+			$includeFields[] = WatchedItemQueryService::INCLUDE_AUTOPATROL_INFO;
 		}
 		if ( $this->fld_sizes ) {
 			$includeFields[] = WatchedItemQueryService::INCLUDE_SIZES;
@@ -258,6 +255,10 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		|| ( isset( $show[WatchedItemQueryService::FILTER_ANON] )
 			&& isset( $show[WatchedItemQueryService::FILTER_NOT_ANON] ) )
 		|| ( isset( $show[WatchedItemQueryService::FILTER_PATROLLED] )
+			&& isset( $show[WatchedItemQueryService::FILTER_NOT_PATROLLED] ) )
+		|| ( isset( $show[WatchedItemQueryService::FILTER_AUTOPATROLLED] )
+			&& isset( $show[WatchedItemQueryService::FILTER_NOT_AUTOPATROLLED] ) )
+		|| ( isset( $show[WatchedItemQueryService::FILTER_AUTOPATROLLED] )
 			&& isset( $show[WatchedItemQueryService::FILTER_NOT_PATROLLED] ) )
 		|| ( isset( $show[WatchedItemQueryService::FILTER_UNREAD] )
 			&& isset( $show[WatchedItemQueryService::FILTER_NOT_UNREAD] ) );
@@ -361,7 +362,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 				Revision::DELETED_COMMENT,
 				$user
 			) ) {
-				$comment = $this->commentStore->getComment( $recentChangeInfo )->text;
+				$comment = $this->commentStore->getComment( 'rc_comment', $recentChangeInfo )->text;
 				if ( $this->fld_comment ) {
 					$vals['comment'] = $comment;
 				}
@@ -374,8 +375,9 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
 		/* Add the patrolled flag */
 		if ( $this->fld_patrol ) {
-			$vals['patrolled'] = $recentChangeInfo['rc_patrolled'] == 1;
+			$vals['patrolled'] = $recentChangeInfo['rc_patrolled'] != RecentChange::PRC_UNPATROLLED;
 			$vals['unpatrolled'] = ChangesList::isUnpatrolled( (object)$recentChangeInfo, $user );
+			$vals['autopatrolled'] = $recentChangeInfo['rc_patrolled'] == RecentChange::PRC_AUTOPATROLLED;
 		}
 
 		if ( $this->fld_loginfo && $recentChangeInfo['rc_type'] == RC_LOG ) {
@@ -481,6 +483,8 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 					WatchedItemQueryService::FILTER_NOT_ANON,
 					WatchedItemQueryService::FILTER_PATROLLED,
 					WatchedItemQueryService::FILTER_NOT_PATROLLED,
+					WatchedItemQueryService::FILTER_AUTOPATROLLED,
+					WatchedItemQueryService::FILTER_NOT_AUTOPATROLLED,
 					WatchedItemQueryService::FILTER_UNREAD,
 					WatchedItemQueryService::FILTER_NOT_UNREAD,
 				]

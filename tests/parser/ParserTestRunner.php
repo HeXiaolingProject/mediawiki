@@ -27,6 +27,7 @@
  */
 use Wikimedia\Rdbms\IDatabase;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Tidy\TidyDriverBase;
 use Wikimedia\ScopedCallback;
 use Wikimedia\TestingAccessWrapper;
 
@@ -142,8 +143,7 @@ class ParserTestRunner {
 
 		$this->keepUploads = !empty( $options['keep-uploads'] );
 
-		$this->fileBackendName = isset( $options['file-backend'] ) ?
-			$options['file-backend'] : false;
+		$this->fileBackendName = $options['file-backend'] ?? false;
 
 		$this->runDisabled = !empty( $options['run-disabled'] );
 		$this->runParsoid = !empty( $options['run-parsoid'] );
@@ -270,7 +270,6 @@ class ParserTestRunner {
 		$setup['wgNoFollowLinks'] = true;
 		$setup['wgNoFollowDomainExceptions'] = [ 'no-nofollow.org' ];
 		$setup['wgExternalLinkTarget'] = false;
-		$setup['wgExperimentalHtmlIds'] = false;
 		$setup['wgLocaltimezone'] = 'UTC';
 		$setup['wgHtml5'] = true;
 		$setup['wgDisableLangConversion'] = false;
@@ -290,10 +289,10 @@ class ParserTestRunner {
 		// Set up null lock managers
 		$setup['wgLockManagers'] = [ [
 			'name' => 'fsLockManager',
-			'class' => 'NullLockManager',
+			'class' => NullLockManager::class,
 		], [
 			'name' => 'nullLockManager',
-			'class' => 'NullLockManager',
+			'class' => NullLockManager::class,
 		] ];
 		$reset = function () {
 			LockManagerGroup::destroySingletons();
@@ -435,7 +434,7 @@ class ParserTestRunner {
 
 		return new RepoGroup(
 			[
-				'class' => 'MockLocalRepo',
+				'class' => MockLocalRepo::class,
 				'name' => 'local',
 				'url' => 'http://example.com/images',
 				'hashLevels' => 2,
@@ -465,7 +464,7 @@ class ParserTestRunner {
 			if ( is_int( $name ) ) {
 				$value();
 			} else {
-				$saved[$name] = isset( $GLOBALS[$name] ) ? $GLOBALS[$name] : null;
+				$saved[$name] = $GLOBALS[$name] ?? null;
 				$GLOBALS[$name] = $value;
 			}
 		}
@@ -537,7 +536,7 @@ class ParserTestRunner {
 	 * @return bool
 	 */
 	public function isSetupDone( $funcName ) {
-		return isset( $this->setupDone[$funcName] ) ? $this->setupDone[$funcName] : false;
+		return $this->setupDone[$funcName] ?? false;
 	}
 
 	/**
@@ -615,9 +614,13 @@ class ParserTestRunner {
 			return false;
 		} );// hooks::register
 
+		// Reset the service in case any other tests already cached some prefixes.
+		MediaWikiServices::getInstance()->resetServiceForTesting( 'InterwikiLookup' );
+
 		return function () {
 			// Tear down
 			Hooks::clear( 'InterwikiLoadPrefix' );
+			MediaWikiServices::getInstance()->resetServiceForTesting( 'InterwikiLookup' );
 		};
 	}
 
@@ -636,7 +639,6 @@ class ParserTestRunner {
 
 	/**
 	 * Remove last character if it is a newline
-	 * @group utility
 	 * @param string $s
 	 * @return string
 	 */
@@ -771,7 +773,7 @@ class ParserTestRunner {
 	/**
 	 * Get a Parser object
 	 *
-	 * @param string $preprocessor
+	 * @param string|null $preprocessor
 	 * @return Parser
 	 */
 	function getParser( $preprocessor = null ) {
@@ -799,7 +801,7 @@ class ParserTestRunner {
 	 *  - options: Array of test options
 	 *  - config: Overrides for global variables, one per line
 	 *
-	 * @return ParserTestResult or false if skipped
+	 * @return ParserTestResult|false false if skipped
 	 */
 	public function runTest( $test ) {
 		wfDebug( __METHOD__.": running {$test['desc']}" );
@@ -810,10 +812,6 @@ class ParserTestRunner {
 		$user = $context->getUser();
 		$options = ParserOptions::newFromContext( $context );
 		$options->setTimestamp( $this->getFakeTimestamp() );
-
-		if ( !isset( $opts['wrap'] ) ) {
-			$options->setWrapOutputClass( false );
-		}
 
 		if ( isset( $opts['tidy'] ) ) {
 			if ( !$this->tidySupport->isEnabled() ) {
@@ -830,10 +828,30 @@ class ParserTestRunner {
 			$titleText = 'Parser test';
 		}
 
+		if ( isset( $opts['maxincludesize'] ) ) {
+			$options->setMaxIncludeSize( $opts['maxincludesize'] );
+		}
+		if ( isset( $opts['maxtemplatedepth'] ) ) {
+			$options->setMaxTemplateDepth( $opts['maxtemplatedepth'] );
+		}
+
 		$local = isset( $opts['local'] );
-		$preprocessor = isset( $opts['preprocessor'] ) ? $opts['preprocessor'] : null;
+		$preprocessor = $opts['preprocessor'] ?? null;
 		$parser = $this->getParser( $preprocessor );
 		$title = Title::newFromText( $titleText );
+
+		if ( isset( $opts['styletag'] ) ) {
+			// For testing the behavior of <style> (including those deduplicated
+			// into <link> tags), add tag hooks to allow them to be generated.
+			$parser->setHook( 'style', function ( $content, $attributes, $parser ) {
+				$marker = Parser::MARKER_PREFIX . '-style-' . md5( $content ) . Parser::MARKER_SUFFIX;
+				$parser->mStripState->addNoWiki( $marker, $content );
+				return Html::inlineStyle( $marker, 'all', $attributes );
+			} );
+			$parser->setHook( 'link', function ( $content, $attributes, $parser ) {
+				return Html::element( 'link', $attributes );
+			} );
+		}
 
 		if ( isset( $opts['pst'] ) ) {
 			$out = $parser->preSaveTransform( $test['input'], $title, $user, $options );
@@ -854,7 +872,8 @@ class ParserTestRunner {
 		} else {
 			$output = $parser->parse( $test['input'], $title, $options, true, true, 1337 );
 			$out = $output->getText( [
-				'allowTOC' => !isset( $opts['notoc'] )
+				'allowTOC' => !isset( $opts['notoc'] ),
+				'unwrap' => !isset( $opts['wrap'] ),
 			] );
 			if ( isset( $opts['tidy'] ) ) {
 				$out = preg_replace( '/\s+$/', '', $out );
@@ -892,7 +911,7 @@ class ParserTestRunner {
 		if ( isset( $output ) && isset( $opts['showflags'] ) ) {
 			$actualFlags = array_keys( TestingAccessWrapper::newFromObject( $output )->mFlags );
 			sort( $actualFlags );
-			$out .= "\nflags=" . join( ', ', $actualFlags );
+			$out .= "\nflags=" . implode( ', ', $actualFlags );
 		}
 
 		ScopedCallback::consume( $teardownGuard );
@@ -1070,6 +1089,11 @@ class ParserTestRunner {
 			'wgFragmentMode' => [ 'legacy' ],
 		];
 
+		$nonIncludable = self::getOptionValue( 'wgNonincludableNamespaces', $opts, false );
+		if ( $nonIncludable !== false ) {
+			$setup['wgNonincludableNamespaces'] = [ $nonIncludable ];
+		}
+
 		if ( $config ) {
 			$configLines = explode( "\n", $config );
 
@@ -1099,6 +1123,7 @@ class ParserTestRunner {
 
 		// Set content language. This invalidates the magic word cache and title services
 		$lang = Language::factory( $langCode );
+		$lang->resetNamespaces();
 		$setup['wgContLang'] = $lang;
 		$reset = function () {
 			MagicWord::clearCache();
@@ -1151,7 +1176,7 @@ class ParserTestRunner {
 	 * @return array
 	 */
 	private function listTables() {
-		global $wgCommentTableSchemaMigrationStage;
+		global $wgCommentTableSchemaMigrationStage, $wgActorTableSchemaMigrationStage;
 
 		$tables = [ 'user', 'user_properties', 'user_former_groups', 'page', 'page_restrictions',
 			'protected_titles', 'revision', 'ip_changes', 'text', 'pagelinks', 'imagelinks',
@@ -1167,6 +1192,12 @@ class ParserTestRunner {
 			$tables[] = 'comment';
 			$tables[] = 'revision_comment_temp';
 			$tables[] = 'image_comment_temp';
+		}
+
+		if ( $wgActorTableSchemaMigrationStage >= MIGRATION_WRITE_BOTH ) {
+			// The new tables for actors are in use
+			$tables[] = 'actor';
+			$tables[] = 'revision_actor_temp';
 		}
 
 		if ( in_array( $this->db->getType(), [ 'mysql', 'sqlite', 'oracle' ] ) ) {
@@ -1223,7 +1254,7 @@ class ParserTestRunner {
 		$teardown[] = $this->markSetupDone( 'setupDatabase' );
 
 		# CREATE TEMPORARY TABLE breaks if there is more than one server
-		if ( wfGetLB()->getServerCount() != 1 ) {
+		if ( MediaWikiServices::getInstance()->getDBLoadBalancer()->getServerCount() != 1 ) {
 			$this->useTemporaryTables = false;
 		}
 
@@ -1233,6 +1264,7 @@ class ParserTestRunner {
 		$this->dbClone = new CloneDatabase( $this->db, $this->listTables(), $prefix );
 		$this->dbClone->useTemporaryTables( $temporary );
 		$this->dbClone->cloneTableStructure();
+		CloneDatabase::changePrefix( $prefix );
 
 		if ( $dbType == 'oracle' ) {
 			$this->db->query( 'BEGIN FILL_WIKI_INFO; END;' );
@@ -1250,7 +1282,7 @@ class ParserTestRunner {
 
 		// Wipe some DB query result caches on setup and teardown
 		$reset = function () {
-			LinkCache::singleton()->clear();
+			MediaWikiServices::getInstance()->getLinkCache()->clear();
 
 			// Clear the message cache
 			MessageCache::singleton()->clear();

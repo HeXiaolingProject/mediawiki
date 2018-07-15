@@ -48,11 +48,11 @@ use Psr\Log\NullLogger;
 class MultiHttpClient implements LoggerAwareInterface {
 	/** @var resource */
 	protected $multiHandle = null; // curl_multi handle
-	/** @var string|null SSL certificates path  */
+	/** @var string|null SSL certificates path */
 	protected $caBundlePath;
-	/** @var int */
+	/** @var float */
 	protected $connTimeout = 10;
-	/** @var int */
+	/** @var float */
 	protected $reqTimeout = 300;
 	/** @var bool */
 	protected $usePipelining = false;
@@ -64,6 +64,11 @@ class MultiHttpClient implements LoggerAwareInterface {
 	protected $userAgent = 'wikimedia/multi-http-client v1.0';
 	/** @var LoggerInterface */
 	protected $logger;
+
+	// In PHP 7 due to https://bugs.php.net/bug.php?id=76480 the request/connect
+	// timeouts are periodically polled instead of being accurately respected.
+	// The select timeout is set to the minimum timeout multiplied by this factor.
+	const TIMEOUT_ACCURACY_FACTOR = 0.1;
 
 	/**
 	 * @param array $options
@@ -107,7 +112,7 @@ class MultiHttpClient implements LoggerAwareInterface {
 	 *   - error     : Any cURL error string
 	 * The map also stores integer-indexed copies of these values. This lets callers do:
 	 * @code
-	 *		list( $rcode, $rdesc, $rhdrs, $rbody, $rerr ) = $http->run( $req );
+	 * 		list( $rcode, $rdesc, $rhdrs, $rbody, $rerr ) = $http->run( $req );
 	 * @endcode
 	 * @param array $req HTTP request array
 	 * @param array $opts
@@ -148,6 +153,8 @@ class MultiHttpClient implements LoggerAwareInterface {
 	public function runMulti( array $reqs, array $opts = [] ) {
 		$chm = $this->getCurlMulti();
 
+		$selectTimeout = $this->getSelectTimeout( $opts );
+
 		// Normalize $reqs and add all of the required cURL handles...
 		$handles = [];
 		foreach ( $reqs as $index => &$req ) {
@@ -172,7 +179,7 @@ class MultiHttpClient implements LoggerAwareInterface {
 				throw new Exception( "Request has no 'url' field set." );
 			}
 			$this->logger->debug( "{$req['method']}: {$req['url']}" );
-			$req['query'] = isset( $req['query'] ) ? $req['query'] : [];
+			$req['query'] = $req['query'] ?? [];
 			$headers = []; // normalized headers
 			if ( isset( $req['headers'] ) ) {
 				foreach ( $req['headers'] as $name => $value ) {
@@ -184,7 +191,7 @@ class MultiHttpClient implements LoggerAwareInterface {
 				$req['body'] = '';
 				$req['headers']['content-length'] = 0;
 			}
-			$req['flags'] = isset( $req['flags'] ) ? $req['flags'] : [];
+			$req['flags'] = $req['flags'] ?? [];
 			$handles[$index] = $this->getCurlHandle( $req, $opts );
 			if ( count( $reqs ) > 1 ) {
 				// https://github.com/guzzle/guzzle/issues/349
@@ -224,7 +231,7 @@ class MultiHttpClient implements LoggerAwareInterface {
 				} while ( $mrc == CURLM_CALL_MULTI_PERFORM );
 				// Wait (if possible) for available work...
 				if ( $active > 0 && $mrc == CURLM_OK ) {
-					if ( curl_multi_select( $chm, 10 ) == -1 ) {
+					if ( curl_multi_select( $chm, $selectTimeout ) == -1 ) {
 						// PHP bug 63411; https://curl.haxx.se/libcurl/c/curl_multi_fdset.html
 						usleep( 5000 ); // 5ms
 					}
@@ -285,11 +292,11 @@ class MultiHttpClient implements LoggerAwareInterface {
 	protected function getCurlHandle( array &$req, array $opts = [] ) {
 		$ch = curl_init();
 
-		curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT,
-			isset( $opts['connTimeout'] ) ? $opts['connTimeout'] : $this->connTimeout );
-		curl_setopt( $ch, CURLOPT_PROXY, isset( $req['proxy'] ) ? $req['proxy'] : $this->proxy );
-		curl_setopt( $ch, CURLOPT_TIMEOUT,
-			isset( $opts['reqTimeout'] ) ? $opts['reqTimeout'] : $this->reqTimeout );
+		curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT_MS,
+			( $opts['connTimeout'] ?? $this->connTimeout ) * 1000 );
+		curl_setopt( $ch, CURLOPT_PROXY, $req['proxy'] ?? $this->proxy );
+		curl_setopt( $ch, CURLOPT_TIMEOUT_MS,
+			( $opts['reqTimeout'] ?? $this->reqTimeout ) * 1000 );
 		curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, 1 );
 		curl_setopt( $ch, CURLOPT_MAXREDIRS, 4 );
 		curl_setopt( $ch, CURLOPT_HEADER, 0 );
@@ -346,16 +353,7 @@ class MultiHttpClient implements LoggerAwareInterface {
 			// Don't interpret POST parameters starting with '@' as file uploads, because this
 			// makes it impossible to POST plain values starting with '@' (and causes security
 			// issues potentially exposing the contents of local files).
-			// The PHP manual says this option was introduced in PHP 5.5 defaults to true in PHP 5.6,
-			// but we support lower versions, and the option doesn't exist in HHVM 5.6.99.
-			if ( defined( 'CURLOPT_SAFE_UPLOAD' ) ) {
-				curl_setopt( $ch, CURLOPT_SAFE_UPLOAD, true );
-			} elseif ( is_array( $req['body'] ) ) {
-				// In PHP 5.2 and later, '@' is interpreted as a file upload if POSTFIELDS
-				// is an array, but not if it's a string. So convert $req['body'] to a string
-				// for safety.
-				$req['body'] = http_build_query( $req['body'] );
-			}
+			curl_setopt( $ch, CURLOPT_SAFE_UPLOAD, true );
 			curl_setopt( $ch, CURLOPT_POSTFIELDS, $req['body'] );
 		} else {
 			if ( is_resource( $req['body'] ) || $req['body'] !== '' ) {
@@ -420,10 +418,37 @@ class MultiHttpClient implements LoggerAwareInterface {
 	}
 
 	/**
+	 * Get a suitable select timeout for the given options.
+	 *
+	 * @param array $opts
+	 * @return float
+	 */
+	private function getSelectTimeout( $opts ) {
+		$connTimeout = $opts['connTimeout'] ?? $this->connTimeout;
+		$reqTimeout = $opts['reqTimeout'] ?? $this->reqTimeout;
+		$timeouts = array_filter( [ $connTimeout, $reqTimeout ] );
+		if ( count( $timeouts ) === 0 ) {
+			return 1;
+		}
+
+		$selectTimeout = min( $timeouts ) * self::TIMEOUT_ACCURACY_FACTOR;
+		// Minimum 10us for sanity
+		if ( $selectTimeout < 10e-6 ) {
+			$selectTimeout = 10e-6;
+		}
+		return $selectTimeout;
+	}
+
+	/**
 	 * @return resource
+	 * @throws Exception
 	 */
 	protected function getCurlMulti() {
 		if ( !$this->multiHandle ) {
+			if ( !function_exists( 'curl_multi_init' ) ) {
+				throw new Exception( "PHP cURL extension missing. " .
+									 "Check https://www.mediawiki.org/wiki/Manual:CURL" );
+			}
 			$cmh = curl_multi_init();
 			curl_multi_setopt( $cmh, CURLMOPT_PIPELINING, (int)$this->usePipelining );
 			curl_multi_setopt( $cmh, CURLMOPT_MAXCONNECTS, (int)$this->maxConnsPerHost );

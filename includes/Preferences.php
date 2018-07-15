@@ -262,12 +262,12 @@ class Preferences {
 	 * @param IContextSource $context
 	 * @param string $formClass
 	 * @param array $remove Array of items to remove
-	 * @return PreferencesForm|HTMLForm
+	 * @return PreferencesFormLegacy|HTMLForm
 	 */
 	public static function getFormObject(
 		$user,
 		IContextSource $context,
-		$formClass = 'PreferencesForm',
+		$formClass = PreferencesFormLegacy::class,
 		array $remove = []
 	) {
 		$preferencesFactory = self::getDefaultPreferencesFactory();
@@ -303,8 +303,10 @@ class Preferences {
 	/**
 	 * Handle the form submission if everything validated properly
 	 *
+	 * @deprecated since 1.31, use PreferencesFactory
+	 *
 	 * @param array $formData
-	 * @param PreferencesForm $form
+	 * @param HTMLForm $form
 	 * @return bool|Status|string
 	 */
 	public static function tryFormSubmit( $formData, $form ) {
@@ -314,7 +316,7 @@ class Preferences {
 
 	/**
 	 * @param array $formData
-	 * @param PreferencesForm $form
+	 * @param HTMLForm $form
 	 * @return Status
 	 */
 	public static function tryUISubmit( $formData, $form ) {

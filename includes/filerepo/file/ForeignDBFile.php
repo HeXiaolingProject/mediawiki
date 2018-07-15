@@ -21,6 +21,7 @@
  * @ingroup FileAbstraction
  */
 
+use MediaWiki\MediaWikiServices;
 use Wikimedia\Rdbms\DBUnexpectedError;
 
 /**
@@ -74,7 +75,7 @@ class ForeignDBFile extends LocalFile {
 	 * @param string $source
 	 * @param bool $watch
 	 * @param bool|string $timestamp
-	 * @param User $user User object or null to use $wgUser
+	 * @param User|null $user User object or null to use $wgUser
 	 * @return bool
 	 * @throws MWException
 	 */
@@ -150,14 +151,13 @@ class ForeignDBFile extends LocalFile {
 			return false; // no description page
 		}
 
-		$cache = ObjectCache::getMainWANInstance();
+		$cache = MediaWikiServices::getInstance()->getMainWANObjectCache();
 
 		return $cache->getWithSetCallback(
 			$this->repo->getLocalCacheKey(
-				'RemoteFileDescription',
-				'url',
+				'ForeignFileDescription',
 				$lang->getCode(),
-				$this->getName(),
+				md5( $this->getName() ),
 				$touched
 			),
 			$this->repo->descriptionCacheExpiry ?: $cache::TTL_UNCACHEABLE,

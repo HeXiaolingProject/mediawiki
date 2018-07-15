@@ -1,16 +1,14 @@
 <?php
-/**
- * MediaWiki Widgets – UsersMultiselectWidget class.
- *
- * @copyright 2017 MediaWiki Widgets Team and others; see AUTHORS.txt
- * @license The MIT License (MIT); see LICENSE.txt
- */
+
 namespace MediaWiki\Widget;
 
-use \OOUI\MultilineTextInputWidget;
+use OOUI\MultilineTextInputWidget;
 
 /**
  * Widget to select multiple users.
+ *
+ * @copyright 2017 MediaWiki Widgets Team and others; see AUTHORS.txt
+ * @license MIT
  */
 class UsersMultiselectWidget extends \OOUI\Widget {
 
@@ -41,7 +39,7 @@ class UsersMultiselectWidget extends \OOUI\Widget {
 		$textarea = new MultilineTextInputWidget( [
 			'name' => $this->inputName,
 			'value' => implode( "\n", $this->usersArray ),
-			'rows' => 25,
+			'rows' => 10,
 		] );
 		$this->prependContent( $textarea );
 	}

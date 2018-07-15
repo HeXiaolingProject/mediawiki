@@ -6,7 +6,7 @@ use Liuggio\StatsdClient\Sender\SenderInterface;
 /**
  * @covers SamplingStatsdClient
  */
-class SamplingStatsdClientTest extends PHPUnit_Framework_TestCase {
+class SamplingStatsdClientTest extends PHPUnit\Framework\TestCase {
 
 	use MediaWikiCoversValidator;
 
@@ -22,7 +22,11 @@ class SamplingStatsdClientTest extends PHPUnit_Framework_TestCase {
 		} else {
 			$sender->expects( $this->never() )->method( 'write' );
 		}
-		mt_srand( $seed );
+		if ( defined( 'MT_RAND_PHP' ) ) {
+			mt_srand( $seed, MT_RAND_PHP );
+		} else {
+			mt_srand( $seed );
+		}
 		$client = new SamplingStatsdClient( $sender );
 		$client->send( $data, $sampleRate );
 	}

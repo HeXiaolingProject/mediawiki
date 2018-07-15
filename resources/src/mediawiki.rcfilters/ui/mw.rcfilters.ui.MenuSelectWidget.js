@@ -38,12 +38,12 @@
 		this.footers = [];
 
 		// Parent
-		mw.rcfilters.ui.MenuSelectWidget.parent.call( this, $.extend( {
+		mw.rcfilters.ui.MenuSelectWidget.parent.call( this, $.extend( config, {
 			$autoCloseIgnore: this.$overlay,
 			width: 650,
 			// Our filtering is done through the model
 			filterFromInput: false
-		}, config ) );
+		} ) );
 		this.setGroupElement(
 			$( '<div>' )
 				.addClass( 'mw-rcfilters-ui-menuSelectWidget-group' )
@@ -144,6 +144,10 @@
 
 		this.menuInitialized = true;
 
+		// Create shared popup for highlight buttons
+		this.highlightPopup = new mw.rcfilters.ui.HighlightPopupWidget( this.controller );
+		this.$overlay.append( this.highlightPopup.$element );
+
 		// Count groups per view
 		$.each( groups, function ( groupName, groupModel ) {
 			if ( !groupModel.isHidden() ) {
@@ -180,6 +184,7 @@
 							widget.model,
 							widget.model.getInvertModel(),
 							filterItem,
+							widget.highlightPopup,
 							{
 								$overlay: widget.$overlay
 							}
@@ -204,6 +209,8 @@
 	 */
 	mw.rcfilters.ui.MenuSelectWidget.prototype.onModelInitialize = function () {
 		this.menuInitialized = false;
+		// Set timeout for the menu to lazy build.
+		setTimeout( this.lazyMenuCreation.bind( this ) );
 	};
 
 	/**
@@ -299,7 +306,7 @@
 	 */
 	mw.rcfilters.ui.MenuSelectWidget.prototype.onKeyDown = function ( e ) {
 		var nextItem,
-			currentItem = this.findHighlightedItem() || this.getSelectedItem();
+			currentItem = this.findHighlightedItem() || this.findSelectedItem();
 
 		// Call parent
 		mw.rcfilters.ui.MenuSelectWidget.parent.prototype.onKeyDown.call( this, e );

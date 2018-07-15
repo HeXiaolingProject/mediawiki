@@ -288,6 +288,9 @@
 								"class": {
 									"enum": ["ResourceLoaderImageModule"]
 								},
+								"defaultColor": {
+									"type": "string"
+								},
 								"data": {
 									"type": "string"
 								},
@@ -302,6 +305,9 @@
 								},
 								"selectorWithVariant": {
 									"type": "string"
+								},
+								"useDataURI": {
+									"type": "boolean"
 								},
 								"variants": {
 									"type": "object"
@@ -590,7 +596,13 @@
 		},
 		"AutoloadNamespaces": {
 			"type": "object",
-			"description": "Mapping of PSR-4 compliant namespace to directory for autoloading"
+			"description": "Mapping of PSR-4 compliant namespace to directory for autoloading",
+			"patternProperties": {
+				"^[A-Za-z0-9\\\\]+\\\\$": {
+					"type": "string"
+				}
+			},
+			"additionalProperties": false
 		},
 		"AutoloadClasses": {
 			"type": "object"
@@ -669,7 +681,7 @@
 		},
 		"SkinOOUIThemes": {
 			"type": "object",
-			"description": "Map of skin names to OOjs UI themes to use. Same format as ResourceLoaderOOUIModule::$builtinSkinThemeMap."
+			"description": "Map of skin names to OOUI themes to use. Same format as ResourceLoaderOOUIModule::$builtinSkinThemeMap."
 		},
 		"PasswordPolicy": {
 			"type": "object",

@@ -36,11 +36,14 @@ use Wikimedia\Rdbms\LoadBalancer;
  * Updates that work through this system will be more likely to complete by the time the client
  * makes their next request after this one than with the JobQueue system.
  *
- * In CLI mode, updates run immediately if no DB writes are pending. Otherwise, they run when:
- *   - a) Any waitForReplication() call if no writes are pending on any DB
- *   - b) A commit happens on Maintenance::getDB( DB_MASTER ) if no writes are pending on any DB
- *   - c) EnqueueableDataUpdate tasks may enqueue on commit of Maintenance::getDB( DB_MASTER )
- *   - d) At the completion of Maintenance::execute()
+ * In CLI mode, deferred updates will run:
+ *   - a) During DeferredUpdates::addUpdate if no LBFactory DB handles have writes pending
+ *   - b) On commit of an LBFactory DB handle if no other such handles have writes pending
+ *   - c) During an LBFactory::waitForReplication call if no LBFactory DBs have writes pending
+ *   - d) When the queue is large and an LBFactory DB handle commits (EnqueueableDataUpdate only)
+ *   - e) At the completion of Maintenance::execute()
+ *
+ * @see Maintenance::setLBFactoryTriggers
  *
  * When updates are deferred, they go into one two FIFO "top-queues" (one for pre-send and one
  * for post-send). Updates enqueued *during* doUpdate() of a "top" update go into the "sub-queue"
@@ -106,10 +109,10 @@ class DeferredUpdates {
 	 *
 	 * @param callable $callable
 	 * @param int $stage DeferredUpdates constant (PRESEND or POSTSEND) (since 1.27)
-	 * @param IDatabase|null $dbw Abort if this DB is rolled back [optional] (since 1.28)
+	 * @param IDatabase|IDatabase[]|null $dbw Abort if this DB is rolled back [optional] (since 1.28)
 	 */
 	public static function addCallableUpdate(
-		$callable, $stage = self::POSTSEND, IDatabase $dbw = null
+		$callable, $stage = self::POSTSEND, $dbw = null
 	) {
 		self::addUpdate( new MWCallableUpdate( $callable, wfGetCaller(), $dbw ), $stage );
 	}
@@ -206,23 +209,29 @@ class DeferredUpdates {
 			foreach ( $updatesByType as $updatesForType ) {
 				foreach ( $updatesForType as $update ) {
 					self::$executeContext = [ 'stage' => $stage, 'subqueue' => [] ];
-					/** @var DeferrableUpdate $update */
-					$guiError = self::runUpdate( $update, $lbFactory, $mode, $stage );
-					$reportableError = $reportableError ?: $guiError;
-					// Do the subqueue updates for $update until there are none
-					while ( self::$executeContext['subqueue'] ) {
-						$subUpdate = reset( self::$executeContext['subqueue'] );
-						$firstKey = key( self::$executeContext['subqueue'] );
-						unset( self::$executeContext['subqueue'][$firstKey] );
-
-						if ( $subUpdate instanceof DataUpdate ) {
-							$subUpdate->setTransactionTicket( $ticket );
-						}
-
-						$guiError = self::runUpdate( $subUpdate, $lbFactory, $mode, $stage );
+					try {
+						/** @var DeferrableUpdate $update */
+						$guiError = self::runUpdate( $update, $lbFactory, $mode, $stage );
 						$reportableError = $reportableError ?: $guiError;
+						// Do the subqueue updates for $update until there are none
+						while ( self::$executeContext['subqueue'] ) {
+							$subUpdate = reset( self::$executeContext['subqueue'] );
+							$firstKey = key( self::$executeContext['subqueue'] );
+							unset( self::$executeContext['subqueue'][$firstKey] );
+
+							if ( $subUpdate instanceof DataUpdate ) {
+								$subUpdate->setTransactionTicket( $ticket );
+							}
+
+							$guiError = self::runUpdate( $subUpdate, $lbFactory, $mode, $stage );
+							$reportableError = $reportableError ?: $guiError;
+						}
+					} finally {
+						// Make sure we always clean up the context.
+						// Losing updates while rewinding the stack is acceptable,
+						// losing updates that are added later is not.
+						self::$executeContext = null;
 					}
-					self::$executeContext = null;
 				}
 			}
 
@@ -265,6 +274,12 @@ class DeferredUpdates {
 				$guiError = $e;
 			}
 			MWExceptionHandler::rollbackMasterChangesAndLog( $e );
+
+			// VW-style hack to work around T190178, so we can make sure
+			// PageMetaDataUpdater doesn't throw exceptions.
+			if ( defined( 'MW_PHPUNIT_TEST' ) ) {
+				throw $e;
+			}
 		}
 
 		return $guiError;
@@ -273,8 +288,9 @@ class DeferredUpdates {
 	/**
 	 * Run all deferred updates immediately if there are no DB writes active
 	 *
-	 * If $mode is 'run' but there are busy databates, EnqueueableDataUpdate
-	 * tasks will be enqueued anyway for the sake of progress.
+	 * If there are many deferred updates pending, $mode is 'run', and there
+	 * are still busy LBFactory database handles, then any EnqueueableDataUpdate
+	 * tasks might be enqueued as jobs to be executed later.
 	 *
 	 * @param string $mode Use "enqueue" to use the job queue when possible
 	 * @return bool Whether updates were allowed to run
@@ -361,7 +377,7 @@ class DeferredUpdates {
 	 */
 	private static function areDatabaseTransactionsActive() {
 		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
-		if ( $lbFactory->hasTransactionRound() ) {
+		if ( $lbFactory->hasTransactionRound() || !$lbFactory->isReadyForRoundOperations() ) {
 			return true;
 		}
 

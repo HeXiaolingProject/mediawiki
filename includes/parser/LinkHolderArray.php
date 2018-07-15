@@ -21,6 +21,8 @@
  * @ingroup Parser
  */
 
+use MediaWiki\MediaWikiServices;
+
 /**
  * @ingroup Parser
  */
@@ -283,7 +285,7 @@ class LinkHolderArray {
 		global $wgContLang;
 
 		$colours = [];
-		$linkCache = LinkCache::singleton();
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
 		$output = $this->parent->getOutput();
 		$linkRenderer = $this->parent->getLinkRenderer();
 
@@ -372,7 +374,7 @@ class LinkHolderArray {
 			foreach ( $entries as $index => $entry ) {
 				$pdbk = $entry['pdbk'];
 				$title = $entry['title'];
-				$query = isset( $entry['query'] ) ? $entry['query'] : [];
+				$query = $entry['query'] ?? [];
 				$key = "$ns:$index";
 				$searchkey = "<!--LINK'\" $key-->";
 				$displayText = $entry['text'];
@@ -404,12 +406,13 @@ class LinkHolderArray {
 				$replacePairs[$searchkey] = $link;
 			}
 		}
-		$replacer = new HashtableReplacer( $replacePairs, 1 );
 
 		# Do the thing
 		$text = preg_replace_callback(
 			'/(<!--LINK\'" .*?-->)/',
-			$replacer->cb(),
+			function ( array $matches ) use ( $replacePairs ) {
+				return $replacePairs[$matches[1]];
+			},
 			$text
 		);
 	}
@@ -434,12 +437,14 @@ class LinkHolderArray {
 			);
 			$output->addInterwikiLink( $link['title'] );
 		}
-		$replacer = new HashtableReplacer( $replacePairs, 1 );
 
 		$text = preg_replace_callback(
 			'/<!--IWLINK\'" (.*?)-->/',
-			$replacer->cb(),
-			$text );
+			function ( array $matches ) use ( $replacePairs ) {
+				return $replacePairs[$matches[1]];
+			},
+			$text
+		);
 	}
 
 	/**
@@ -451,7 +456,7 @@ class LinkHolderArray {
 		$linkBatch = new LinkBatch();
 		$variantMap = []; // maps $pdbkey_Variant => $keys (of link holders)
 		$output = $this->parent->getOutput();
-		$linkCache = LinkCache::singleton();
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
 		$titlesToBeConverted = '';
 		$titlesAttrs = [];
 

@@ -22,7 +22,7 @@
  * @author Brian Wolff
  */
 
-use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\IResultWrapper;
 use Wikimedia\Rdbms\IDatabase;
 
 /**
@@ -114,7 +114,7 @@ class MediaStatisticsPage extends QueryPage {
 	 * @param OutputPage $out
 	 * @param Skin $skin (deprecated presumably)
 	 * @param IDatabase $dbr
-	 * @param ResultWrapper $res Results from query
+	 * @param IResultWrapper $res Results from query
 	 * @param int $num Number of results
 	 * @param int $offset Paging offset (Should always be 0 in our case)
 	 */
@@ -182,7 +182,7 @@ class MediaStatisticsPage extends QueryPage {
 			[],
 			$linkRenderer->makeLink( $mimeSearch, $mime )
 		);
-		$row .= Html::element(
+		$row .= Html::rawElement(
 			'td',
 			[],
 			$this->getExtensionList( $mime )
@@ -245,7 +245,7 @@ class MediaStatisticsPage extends QueryPage {
 		$extArray = explode( ' ', $exts );
 		$extArray = array_unique( $extArray );
 		foreach ( $extArray as &$ext ) {
-			$ext = '.' . $ext;
+			$ext = htmlspecialchars( '.' . $ext );
 		}
 
 		return $this->getLanguage()->commaList( $extArray );
@@ -356,15 +356,15 @@ class MediaStatisticsPage extends QueryPage {
 	 * Initialize total values so we can figure out percentages later.
 	 *
 	 * @param IDatabase $dbr
-	 * @param ResultWrapper $res
+	 * @param IResultWrapper $res
 	 */
 	public function preprocessResults( $dbr, $res ) {
 		$this->executeLBFromResultWrapper( $res );
 		$this->totalCount = $this->totalBytes = 0;
 		foreach ( $res as $row ) {
 			$mediaStats = $this->splitFakeTitle( $row->title );
-			$this->totalCount += isset( $mediaStats[2] ) ? $mediaStats[2] : 0;
-			$this->totalBytes += isset( $mediaStats[3] ) ? $mediaStats[3] : 0;
+			$this->totalCount += $mediaStats[2] ?? 0;
+			$this->totalBytes += $mediaStats[3] ?? 0;
 		}
 		$res->seek( 0 );
 	}

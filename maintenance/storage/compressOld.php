@@ -104,7 +104,7 @@ class CompressOld extends Maintenance {
 		global $wgDBname;
 		if ( !function_exists( "gzdeflate" ) ) {
 			$this->fatalError( "You must enable zlib support in PHP to compress old revisions!\n" .
-				"Please see http://www.php.net/manual/en/ref.zlib.php\n" );
+				"Please see https://secure.php.net/manual/en/ref.zlib.php\n" );
 		}
 
 		$type = $this->getOption( 'type', 'concat' );
@@ -462,7 +462,6 @@ class CompressOld extends Maintenance {
 				$this->output( "/" );
 				$this->commitTransaction( $dbw, __METHOD__ );
 				$i += $thisChunkSize;
-				wfWaitForSlaves();
 			}
 			$this->output( "\n" );
 		}
@@ -471,5 +470,5 @@ class CompressOld extends Maintenance {
 	}
 }
 
-$maintClass = 'CompressOld';
+$maintClass = CompressOld::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

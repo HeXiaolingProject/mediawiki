@@ -1,14 +1,20 @@
 <?php
+
+use Mediawiki\Http\HttpRequestFactory;
 use MediaWiki\Interwiki\InterwikiLookup;
 use MediaWiki\Linker\LinkRenderer;
 use MediaWiki\Linker\LinkRendererFactory;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Preferences\PreferencesFactory;
 use MediaWiki\Services\DestructibleService;
 use MediaWiki\Services\SalvageableService;
 use MediaWiki\Services\ServiceDisabledException;
 use MediaWiki\Shell\CommandFactory;
 use MediaWiki\Storage\BlobStore;
 use MediaWiki\Storage\BlobStoreFactory;
+use MediaWiki\Storage\NameTableStore;
+use MediaWiki\Storage\RevisionFactory;
+use MediaWiki\Storage\RevisionLookup;
 use MediaWiki\Storage\RevisionStore;
 use MediaWiki\Storage\SqlBlobStore;
 
@@ -51,14 +57,14 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 
 	public function testGetInstance() {
 		$services = MediaWikiServices::getInstance();
-		$this->assertInstanceOf( 'MediaWiki\\MediaWikiServices', $services );
+		$this->assertInstanceOf( MediaWikiServices::class, $services );
 	}
 
 	public function testForceGlobalInstance() {
 		$newServices = $this->newMediaWikiServices();
 		$oldServices = MediaWikiServices::forceGlobalInstance( $newServices );
 
-		$this->assertInstanceOf( 'MediaWiki\\MediaWikiServices', $oldServices );
+		$this->assertInstanceOf( MediaWikiServices::class, $oldServices );
 		$this->assertNotSame( $oldServices, $newServices );
 
 		$theServices = MediaWikiServices::getInstance();
@@ -147,7 +153,7 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 		$newServices = $this->newMediaWikiServices();
 		$oldServices = MediaWikiServices::forceGlobalInstance( $newServices );
 
-		$lbFactory = $this->getMockBuilder( 'LBFactorySimple' )
+		$lbFactory = $this->getMockBuilder( \Wikimedia\Rdbms\LBFactorySimple::class )
 			->disableOriginalConstructor()
 			->getMock();
 
@@ -175,6 +181,9 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 
 		MediaWikiServices::forceGlobalInstance( $oldServices );
 		$newServices->destroy();
+
+		// No exception was thrown, avoid being risky
+		$this->assertTrue( true );
 	}
 
 	public function testResetChildProcessServices() {
@@ -222,7 +231,7 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 			'Test',
 			function () use ( &$serviceCounter ) {
 				$serviceCounter++;
-				$service = $this->createMock( 'MediaWiki\Services\DestructibleService' );
+				$service = $this->createMock( MediaWiki\Services\DestructibleService::class );
 				$service->expects( $this->once() )->method( 'destroy' );
 				return $service;
 			}
@@ -251,7 +260,7 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 		$services->defineService(
 			'Test',
 			function () {
-				$service = $this->createMock( 'MediaWiki\Services\DestructibleService' );
+				$service = $this->createMock( MediaWiki\Services\DestructibleService::class );
 				$service->expects( $this->never() )->method( 'destroy' );
 				return $service;
 			}
@@ -298,8 +307,6 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 
 	public function provideGetService() {
 		// NOTE: This should list all service getters defined in ServiceWiring.php.
-		// NOTE: For every test case defined here there should be a corresponding
-		// test case defined in provideGetters().
 		return [
 			'BootstrapConfig' => [ 'BootstrapConfig', Config::class ],
 			'ConfigFactory' => [ 'ConfigFactory', ConfigFactory::class ],
@@ -307,13 +314,15 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 			'SiteStore' => [ 'SiteStore', SiteStore::class ],
 			'SiteLookup' => [ 'SiteLookup', SiteLookup::class ],
 			'StatsdDataFactory' => [ 'StatsdDataFactory', IBufferingStatsdDataFactory::class ],
+			'PerDbNameStatsdDataFactory' =>
+				[ 'PerDbNameStatsdDataFactory', IBufferingStatsdDataFactory::class ],
 			'InterwikiLookup' => [ 'InterwikiLookup', InterwikiLookup::class ],
 			'EventRelayerGroup' => [ 'EventRelayerGroup', EventRelayerGroup::class ],
 			'SearchEngineFactory' => [ 'SearchEngineFactory', SearchEngineFactory::class ],
 			'SearchEngineConfig' => [ 'SearchEngineConfig', SearchEngineConfig::class ],
 			'SkinFactory' => [ 'SkinFactory', SkinFactory::class ],
 			'DBLoadBalancerFactory' => [ 'DBLoadBalancerFactory', Wikimedia\Rdbms\LBFactory::class ],
-			'DBLoadBalancer' => [ 'DBLoadBalancer', 'LoadBalancer' ],
+			'DBLoadBalancer' => [ 'DBLoadBalancer', Wikimedia\Rdbms\LoadBalancer::class ],
 			'WatchedItemStore' => [ 'WatchedItemStore', WatchedItemStore::class ],
 			'WatchedItemQueryService' => [ 'WatchedItemQueryService', WatchedItemQueryService::class ],
 			'CryptRand' => [ 'CryptRand', CryptRand::class ],
@@ -339,6 +348,22 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 			'BlobStore' => [ 'BlobStore', BlobStore::class ],
 			'_SqlBlobStore' => [ '_SqlBlobStore', SqlBlobStore::class ],
 			'RevisionStore' => [ 'RevisionStore', RevisionStore::class ],
+			'RevisionLookup' => [ 'RevisionLookup', RevisionLookup::class ],
+			'RevisionFactory' => [ 'RevisionFactory', RevisionFactory::class ],
+			'ContentModelStore' => [ 'ContentModelStore', NameTableStore::class ],
+			'SlotRoleStore' => [ 'SlotRoleStore', NameTableStore::class ],
+			'HttpRequestFactory' => [ 'HttpRequestFactory', HttpRequestFactory::class ],
+			'CommentStore' => [ 'CommentStore', CommentStore::class ],
+			'ChangeTagDefStore' => [ 'ChangeTagDefStore', NameTableStore::class ],
+			'ConfiguredReadOnlyMode' => [ 'ConfiguredReadOnlyMode', ConfiguredReadOnlyMode::class ],
+			'ReadOnlyMode' => [ 'ReadOnlyMode', ReadOnlyMode::class ],
+			'UploadRevisionImporter' => [ 'UploadRevisionImporter', UploadRevisionImporter::class ],
+			'OldRevisionImporter' => [ 'OldRevisionImporter', OldRevisionImporter::class ],
+			'WikiRevisionOldRevisionImporterNoUpdates' =>
+				[ 'WikiRevisionOldRevisionImporterNoUpdates', ImportableOldRevisionImporter::class ],
+			'ExternalStoreFactory' => [ 'ExternalStoreFactory', ExternalStoreFactory::class ],
+			'PreferencesFactory' => [ 'PreferencesFactory', PreferencesFactory::class ],
+			'ActorMigration' => [ 'ActorMigration', ActorMigration::class ],
 		];
 	}
 
@@ -365,6 +390,17 @@ class MediaWikiServicesTest extends MediaWikiTestCase {
 			$service = $services->getService( $name );
 			$this->assertInternalType( 'object', $service );
 		}
+	}
+
+	public function testDefaultServiceWiringServicesHaveTests() {
+		global $IP;
+		$testedServices = array_keys( $this->provideGetService() );
+		$allServices = array_keys( include $IP . '/includes/ServiceWiring.php' );
+		$this->assertEquals(
+			[],
+			array_diff( $allServices, $testedServices ),
+			'The following services have not been added to MediaWikiServicesTest::provideGetService'
+		);
 	}
 
 }

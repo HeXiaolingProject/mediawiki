@@ -209,68 +209,102 @@ class LanguageTest extends LanguageClassesTestCase {
 	}
 
 	/**
-	 * @covers Language::truncate
+	 * @covers Language::truncateForDatabase
+	 * @covers Language::truncateInternal
 	 */
-	public function testTruncate() {
+	public function testTruncateForDatabase() {
 		$this->assertEquals(
 			"XXX",
-			$this->getLang()->truncate( "1234567890", 0, 'XXX' ),
+			$this->getLang()->truncateForDatabase( "1234567890", 0, 'XXX' ),
 			'truncate prefix, len 0, small ellipsis'
 		);
 
 		$this->assertEquals(
 			"12345XXX",
-			$this->getLang()->truncate( "1234567890", 8, 'XXX' ),
+			$this->getLang()->truncateForDatabase( "1234567890", 8, 'XXX' ),
 			'truncate prefix, small ellipsis'
 		);
 
 		$this->assertEquals(
 			"123456789",
-			$this->getLang()->truncate( "123456789", 5, 'XXXXXXXXXXXXXXX' ),
+			$this->getLang()->truncateForDatabase( "123456789", 5, 'XXXXXXXXXXXXXXX' ),
 			'truncate prefix, large ellipsis'
 		);
 
 		$this->assertEquals(
 			"XXX67890",
-			$this->getLang()->truncate( "1234567890", -8, 'XXX' ),
+			$this->getLang()->truncateForDatabase( "1234567890", -8, 'XXX' ),
 			'truncate suffix, small ellipsis'
 		);
 
 		$this->assertEquals(
 			"123456789",
-			$this->getLang()->truncate( "123456789", -5, 'XXXXXXXXXXXXXXX' ),
+			$this->getLang()->truncateForDatabase( "123456789", -5, 'XXXXXXXXXXXXXXX' ),
 			'truncate suffix, large ellipsis'
 		);
 		$this->assertEquals(
 			"123XXX",
-			$this->getLang()->truncate( "123                ", 9, 'XXX' ),
+			$this->getLang()->truncateForDatabase( "123                ", 9, 'XXX' ),
 			'truncate prefix, with spaces'
 		);
 		$this->assertEquals(
 			"12345XXX",
-			$this->getLang()->truncate( "12345            8", 11, 'XXX' ),
+			$this->getLang()->truncateForDatabase( "12345            8", 11, 'XXX' ),
 			'truncate prefix, with spaces and non-space ending'
 		);
 		$this->assertEquals(
 			"XXX234",
-			$this->getLang()->truncate( "1              234", -8, 'XXX' ),
+			$this->getLang()->truncateForDatabase( "1              234", -8, 'XXX' ),
 			'truncate suffix, with spaces'
 		);
 		$this->assertEquals(
 			"12345XXX",
-			$this->getLang()->truncate( "1234567890", 5, 'XXX', false ),
+			$this->getLang()->truncateForDatabase( "1234567890", 5, 'XXX', false ),
 			'truncate without adjustment'
 		);
 		$this->assertEquals(
 			"泰乐菌...",
-			$this->getLang()->truncate( "泰乐菌素123456789", 11, '...', false ),
+			$this->getLang()->truncateForDatabase( "泰乐菌素123456789", 11, '...', false ),
 			'truncate does not chop Unicode characters in half'
 		);
 		$this->assertEquals(
 			"\n泰乐菌...",
-			$this->getLang()->truncate( "\n泰乐菌素123456789", 12, '...', false ),
+			$this->getLang()->truncateForDatabase( "\n泰乐菌素123456789", 12, '...', false ),
 			'truncate does not chop Unicode characters in half if there is a preceding newline'
 		);
+	}
+
+	/**
+	 * @dataProvider provideTruncateData
+	 * @covers Language::truncateForVisual
+	 * @covers Language::truncateInternal
+	 */
+	public function testTruncateForVisual(
+		$expected, $string, $length, $ellipsis = '...', $adjustLength = true
+	) {
+		$this->assertEquals(
+			$expected,
+			$this->getLang()->truncateForVisual( $string, $length, $ellipsis, $adjustLength )
+		);
+	}
+
+	/**
+	 * @return array Format is ($expected, $string, $length, $ellipsis, $adjustLength)
+	 */
+	public static function provideTruncateData() {
+		return [
+			[ "XXX", "тестирам да ли ради", 0, "XXX" ],
+			[ "testnXXX", "testni scenarij", 8, "XXX" ],
+			[ "حالة اختبار", "حالة اختبار", 5, "XXXXXXXXXXXXXXX" ],
+			[ "XXXедент", "прецедент", -8, "XXX" ],
+			[ "XXപിൾ", "ആപ്പിൾ", -5, "XX" ],
+			[ "神秘XXX", "神秘                ", 9, "XXX" ],
+			[ "ΔημιουργXXX", "Δημιουργία           Σύμπαντος", 11, "XXX" ],
+			[ "XXXの家です", "地球は私たちの唯               の家です", -8, "XXX" ],
+			[ "زندگیXXX", "زندگی زیباست", 6, "XXX", false ],
+			[ "ცხოვრება...", "ცხოვრება არის საოცარი", 8, "...", false ],
+			[ "\nທ່ານ...", "\nທ່ານບໍ່ຮູ້ຫນັງສື", 5, "...", false ],
+		];
 	}
 
 	/**
@@ -996,6 +1030,13 @@ class LanguageTest extends LanguageClassesTestCase {
 				'Thai year'
 			],
 			[
+				'xkY',
+				'19410101090705',
+				'2484',
+				'2484',
+				'Thai year'
+			],
+			[
 				'xoY',
 				'20120102090705',
 				'101',
@@ -1076,27 +1117,27 @@ class LanguageTest extends LanguageClassesTestCase {
 				"1 gigabyte"
 			],
 			[
-				pow( 1024, 4 ),
+				1024 ** 4,
 				"1 TB",
 				"1 terabyte"
 			],
 			[
-				pow( 1024, 5 ),
+				1024 ** 5,
 				"1 PB",
 				"1 petabyte"
 			],
 			[
-				pow( 1024, 6 ),
+				1024 ** 6,
 				"1 EB",
 				"1,024 exabyte"
 			],
 			[
-				pow( 1024, 7 ),
+				1024 ** 7,
 				"1 ZB",
 				"1 zetabyte"
 			],
 			[
-				pow( 1024, 8 ),
+				1024 ** 8,
 				"1 YB",
 				"1 yottabyte"
 			],
@@ -1139,37 +1180,37 @@ class LanguageTest extends LanguageClassesTestCase {
 				"1 megabit per second"
 			],
 			[
-				pow( 10, 9 ),
+				10 ** 9,
 				"1 Gbps",
 				"1 gigabit per second"
 			],
 			[
-				pow( 10, 12 ),
+				10 ** 12,
 				"1 Tbps",
 				"1 terabit per second"
 			],
 			[
-				pow( 10, 15 ),
+				10 ** 15,
 				"1 Pbps",
 				"1 petabit per second"
 			],
 			[
-				pow( 10, 18 ),
+				10 ** 18,
 				"1 Ebps",
 				"1 exabit per second"
 			],
 			[
-				pow( 10, 21 ),
+				10 ** 21,
 				"1 Zbps",
 				"1 zetabit per second"
 			],
 			[
-				pow( 10, 24 ),
+				10 ** 24,
 				"1 Ybps",
 				"1 yottabit per second"
 			],
 			[
-				pow( 10, 27 ),
+				10 ** 27,
 				"1,000 Ybps",
 				"1,000 yottabits per second"
 			],
@@ -1559,9 +1600,9 @@ class LanguageTest extends LanguageClassesTestCase {
 	 * @covers Language::embedBidi()
 	 */
 	public function testEmbedBidi() {
-		$lre = "\xE2\x80\xAA"; // U+202A LEFT-TO-RIGHT EMBEDDING
-		$rle = "\xE2\x80\xAB"; // U+202B RIGHT-TO-LEFT EMBEDDING
-		$pdf = "\xE2\x80\xAC"; // U+202C POP DIRECTIONAL FORMATTING
+		$lre = "\u{202A}"; // U+202A LEFT-TO-RIGHT EMBEDDING
+		$rle = "\u{202B}"; // U+202B RIGHT-TO-LEFT EMBEDDING
+		$pdf = "\u{202C}"; // U+202C POP DIRECTIONAL FORMATTING
 		$lang = $this->getLang();
 		$this->assertEquals(
 			'123',

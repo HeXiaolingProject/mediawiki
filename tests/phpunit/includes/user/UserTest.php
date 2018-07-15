@@ -4,6 +4,7 @@ define( 'NS_UNITTEST', 5600 );
 define( 'NS_UNITTEST_TALK', 5601 );
 
 use MediaWiki\MediaWikiServices;
+use MediaWiki\User\UserIdentityValue;
 use Wikimedia\TestingAccessWrapper;
 
 /**
@@ -21,7 +22,9 @@ class UserTest extends MediaWikiTestCase {
 		$this->setMwGlobals( [
 			'wgGroupPermissions' => [],
 			'wgRevokePermissions' => [],
+			'wgActorTableSchemaMigrationStage' => MIGRATION_WRITE_BOTH,
 		] );
+		$this->overrideMwServices();
 
 		$this->setUpPermissionGlobals();
 
@@ -121,7 +124,7 @@ class UserTest extends MediaWikiTestCase {
 		$this->assertContains( 'nukeworld', $rights );
 
 		// Add a Session that limits rights
-		$mock = $this->getMockBuilder( stdclass::class )
+		$mock = $this->getMockBuilder( stdClass::class )
 			->setMethods( [ 'getAllowedUserRights', 'deregisterSession', 'getSessionId' ] )
 			->getMock();
 		$mock->method( 'getAllowedUserRights' )->willReturn( [ 'test', 'writetest' ] );
@@ -348,6 +351,7 @@ class UserTest extends MediaWikiTestCase {
 
 		$user->setOption( 'userjs-someoption', 'test' );
 		$user->setOption( 'rclimit', 200 );
+		$user->setOption( 'wpwatchlistdays', '0' );
 		$user->saveSettings();
 
 		$user = User::newFromName( $user->getName() );
@@ -359,6 +363,11 @@ class UserTest extends MediaWikiTestCase {
 		MediaWikiServices::getInstance()->getMainWANObjectCache()->clearProcessCache();
 		$this->assertEquals( 'test', $user->getOption( 'userjs-someoption' ) );
 		$this->assertEquals( 200, $user->getOption( 'rclimit' ) );
+
+		// Check that an option saved as a string '0' is returned as an integer.
+		$user = User::newFromName( $user->getName() );
+		$user->load( User::READ_LATEST );
+		$this->assertSame( 0, $user->getOption( 'wpwatchlistdays' ) );
 	}
 
 	/**
@@ -617,6 +626,7 @@ class UserTest extends MediaWikiTestCase {
 			'enableAutoblock' => true,
 			'expiry' => wfTimestamp( TS_MW, $expiryFiveHours ),
 		] );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
 		$block->setTarget( $user1tmp );
 		$block->setBlocker( $userBlocker );
 		$res = $block->insert();
@@ -694,6 +704,7 @@ class UserTest extends MediaWikiTestCase {
 		$request1 = new FauxRequest();
 		$request1->getSession()->setUser( $testUser );
 		$block = new Block( [ 'enableAutoblock' => true ] );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
 		$block->setTarget( $testUser );
 		$block->setBlocker( $userBlocker );
 		$res = $block->insert();
@@ -739,6 +750,7 @@ class UserTest extends MediaWikiTestCase {
 		$request1 = new FauxRequest();
 		$request1->getSession()->setUser( $user1Tmp );
 		$block = new Block( [ 'enableAutoblock' => true, 'expiry' => 'infinity' ] );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
 		$block->setTarget( $user1Tmp );
 		$block->setBlocker( $userBlocker );
 		$res = $block->insert();
@@ -834,6 +846,7 @@ class UserTest extends MediaWikiTestCase {
 		$request1 = new FauxRequest();
 		$request1->getSession()->setUser( $user1tmp );
 		$block = new Block( [ 'enableAutoblock' => true ] );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
 		$block->setTarget( $user1tmp );
 		$block->setBlocker( $userBlocker );
 		$res = $block->insert();
@@ -879,6 +892,7 @@ class UserTest extends MediaWikiTestCase {
 		$request1 = new FauxRequest();
 		$request1->getSession()->setUser( $user1tmp );
 		$block = new Block( [ 'enableAutoblock' => true ] );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
 		$block->setTarget( $user1tmp );
 		$block->setBlocker( $userBlocker );
 		$res = $block->insert();
@@ -956,20 +970,18 @@ class UserTest extends MediaWikiTestCase {
 		] );
 
 		$db = wfGetDB( DB_MASTER );
-
-		$data = new stdClass();
-		$data->user_id = 1;
-		$data->user_name = 'name';
-		$data->user_real_name = 'Real Name';
-		$data->user_touched = 1;
-		$data->user_token = 'token';
-		$data->user_email = 'a@a.a';
-		$data->user_email_authenticated = null;
-		$data->user_email_token = 'token';
-		$data->user_email_token_expires = null;
-		$data->user_editcount = $editCount;
-		$data->user_registration = $db->timestamp( time() - $memberSince * 86400 );
-		$user = User::newFromRow( $data );
+		$userQuery = User::getQueryInfo();
+		$row = $db->selectRow(
+			$userQuery['tables'],
+			$userQuery['fields'],
+			[ 'user_id' => $this->getTestUser()->getUser()->getId() ],
+			__METHOD__,
+			[],
+			$userQuery['joins']
+		);
+		$row->user_editcount = $editCount;
+		$row->user_registration = $db->timestamp( time() - $memberSince * 86400 );
+		$user = User::newFromRow( $row );
 
 		$this->assertEquals( $expLevel, $user->getExperienceLevel() );
 	}
@@ -1027,5 +1039,308 @@ class UserTest extends MediaWikiTestCase {
 			]
 		);
 		$this->assertTrue( User::isLocallyBlockedProxy( $ip ) );
+	}
+
+	public function testActorId() {
+		$this->hideDeprecated( 'User::selectFields' );
+
+		// Newly-created user has an actor ID
+		$user = User::createNew( 'UserTestActorId1' );
+		$id = $user->getId();
+		$this->assertTrue( $user->getActorId() > 0, 'User::createNew sets an actor ID' );
+
+		$user = User::newFromName( 'UserTestActorId2' );
+		$user->addToDatabase();
+		$this->assertTrue( $user->getActorId() > 0, 'User::addToDatabase sets an actor ID' );
+
+		$user = User::newFromName( 'UserTestActorId1' );
+		$this->assertTrue( $user->getActorId() > 0, 'Actor ID can be retrieved for user loaded by name' );
+
+		$user = User::newFromId( $id );
+		$this->assertTrue( $user->getActorId() > 0, 'Actor ID can be retrieved for user loaded by ID' );
+
+		$user2 = User::newFromActorId( $user->getActorId() );
+		$this->assertEquals( $user->getId(), $user2->getId(),
+			'User::newFromActorId works for an existing user' );
+
+		$row = $this->db->selectRow( 'user', User::selectFields(), [ 'user_id' => $id ], __METHOD__ );
+		$user = User::newFromRow( $row );
+		$this->assertTrue( $user->getActorId() > 0,
+			'Actor ID can be retrieved for user loaded with User::selectFields()' );
+
+		$this->db->delete( 'actor', [ 'actor_user' => $id ], __METHOD__ );
+		User::purge( wfWikiId(), $id );
+		// Because WANObjectCache->delete() stupidly doesn't delete from the process cache.
+		ObjectCache::getMainWANInstance()->clearProcessCache();
+
+		$user = User::newFromId( $id );
+		$this->assertFalse( $user->getActorId() > 0, 'No Actor ID by default if none in database' );
+		$this->assertTrue( $user->getActorId( $this->db ) > 0, 'Actor ID can be created if none in db' );
+
+		$user->setName( 'UserTestActorId4-renamed' );
+		$user->saveSettings();
+		$this->assertEquals(
+			$user->getName(),
+			$this->db->selectField(
+				'actor', 'actor_name', [ 'actor_id' => $user->getActorId() ], __METHOD__
+			),
+			'User::saveSettings updates actor table for name change'
+		);
+
+		// For sanity
+		$ip = '192.168.12.34';
+		$this->db->delete( 'actor', [ 'actor_name' => $ip ], __METHOD__ );
+
+		$user = User::newFromName( $ip, false );
+		$this->assertFalse( $user->getActorId() > 0, 'Anonymous user has no actor ID by default' );
+		$this->assertTrue( $user->getActorId( $this->db ) > 0,
+			'Actor ID can be created for an anonymous user' );
+
+		$user = User::newFromName( $ip, false );
+		$this->assertTrue( $user->getActorId() > 0, 'Actor ID can be loaded for an anonymous user' );
+		$user2 = User::newFromActorId( $user->getActorId() );
+		$this->assertEquals( $user->getName(), $user2->getName(),
+			'User::newFromActorId works for an anonymous user' );
+	}
+
+	public function testNewFromAnyId() {
+		// Registered user
+		$user = $this->getTestUser()->getUser();
+		for ( $i = 1; $i <= 7; $i++ ) {
+			$test = User::newFromAnyId(
+				( $i & 1 ) ? $user->getId() : null,
+				( $i & 2 ) ? $user->getName() : null,
+				( $i & 4 ) ? $user->getActorId() : null
+			);
+			$this->assertSame( $user->getId(), $test->getId() );
+			$this->assertSame( $user->getName(), $test->getName() );
+			$this->assertSame( $user->getActorId(), $test->getActorId() );
+		}
+
+		// Anon user. Can't load by only user ID when that's 0.
+		$user = User::newFromName( '192.168.12.34', false );
+		$user->getActorId( $this->db ); // Make sure an actor ID exists
+
+		$test = User::newFromAnyId( null, '192.168.12.34', null );
+		$this->assertSame( $user->getId(), $test->getId() );
+		$this->assertSame( $user->getName(), $test->getName() );
+		$this->assertSame( $user->getActorId(), $test->getActorId() );
+		$test = User::newFromAnyId( null, null, $user->getActorId() );
+		$this->assertSame( $user->getId(), $test->getId() );
+		$this->assertSame( $user->getName(), $test->getName() );
+		$this->assertSame( $user->getActorId(), $test->getActorId() );
+
+		// Bogus data should still "work" as long as nothing triggers a ->load(),
+		// and accessing the specified data shouldn't do that.
+		$test = User::newFromAnyId( 123456, 'Bogus', 654321 );
+		$this->assertSame( 123456, $test->getId() );
+		$this->assertSame( 'Bogus', $test->getName() );
+		$this->assertSame( 654321, $test->getActorId() );
+
+		// Exceptional cases
+		try {
+			User::newFromAnyId( null, null, null );
+			$this->fail( 'Expected exception not thrown' );
+		} catch ( InvalidArgumentException $ex ) {
+		}
+		try {
+			User::newFromAnyId( 0, null, 0 );
+			$this->fail( 'Expected exception not thrown' );
+		} catch ( InvalidArgumentException $ex ) {
+		}
+	}
+
+	/**
+	 * @covers User::newFromIdentity
+	 */
+	public function testNewFromIdentity() {
+		// Registered user
+		$user = $this->getTestUser()->getUser();
+
+		$this->assertSame( $user, User::newFromIdentity( $user ) );
+
+		// ID only
+		$identity = new UserIdentityValue( $user->getId(), '', 0 );
+		$result = User::newFromIdentity( $identity );
+		$this->assertInstanceOf( User::class, $result );
+		$this->assertSame( $user->getId(), $result->getId(), 'ID' );
+		$this->assertSame( $user->getName(), $result->getName(), 'Name' );
+		$this->assertSame( $user->getActorId(), $result->getActorId(), 'Actor' );
+
+		// Name only
+		$identity = new UserIdentityValue( 0, $user->getName(), 0 );
+		$result = User::newFromIdentity( $identity );
+		$this->assertInstanceOf( User::class, $result );
+		$this->assertSame( $user->getId(), $result->getId(), 'ID' );
+		$this->assertSame( $user->getName(), $result->getName(), 'Name' );
+		$this->assertSame( $user->getActorId(), $result->getActorId(), 'Actor' );
+
+		// Actor only
+		$identity = new UserIdentityValue( 0, '', $user->getActorId() );
+		$result = User::newFromIdentity( $identity );
+		$this->assertInstanceOf( User::class, $result );
+		$this->assertSame( $user->getId(), $result->getId(), 'ID' );
+		$this->assertSame( $user->getName(), $result->getName(), 'Name' );
+		$this->assertSame( $user->getActorId(), $result->getActorId(), 'Actor' );
+	}
+
+	/**
+	 * @covers User::getBlockedStatus
+	 * @covers User::getBlock
+	 * @covers User::blockedBy
+	 * @covers User::blockedFor
+	 * @covers User::isHidden
+	 * @covers User::isBlockedFrom
+	 */
+	public function testBlockInstanceCache() {
+		// First, check the user isn't blocked
+		$user = $this->getMutableTestUser()->getUser();
+		$ut = Title::makeTitle( NS_USER_TALK, $user->getName() );
+		$this->assertNull( $user->getBlock( false ), 'sanity check' );
+		$this->assertSame( '', $user->blockedBy(), 'sanity check' );
+		$this->assertSame( '', $user->blockedFor(), 'sanity check' );
+		$this->assertFalse( (bool)$user->isHidden(), 'sanity check' );
+		$this->assertFalse( $user->isBlockedFrom( $ut ), 'sanity check' );
+
+		// Block the user
+		$blocker = $this->getTestSysop()->getUser();
+		$block = new Block( [
+			'hideName' => true,
+			'allowUsertalk' => false,
+			'reason' => 'Because',
+		] );
+		$block->setTarget( $user );
+		$block->setBlocker( $blocker );
+		$res = $block->insert();
+		$this->assertTrue( (bool)$res['id'], 'sanity check: Failed to insert block' );
+
+		// Clear cache and confirm it loaded the block properly
+		$user->clearInstanceCache();
+		$this->assertInstanceOf( Block::class, $user->getBlock( false ) );
+		$this->assertSame( $blocker->getName(), $user->blockedBy() );
+		$this->assertSame( 'Because', $user->blockedFor() );
+		$this->assertTrue( (bool)$user->isHidden() );
+		$this->assertTrue( $user->isBlockedFrom( $ut ) );
+
+		// Unblock
+		$block->delete();
+
+		// Clear cache and confirm it loaded the not-blocked properly
+		$user->clearInstanceCache();
+		$this->assertNull( $user->getBlock( false ) );
+		$this->assertSame( '', $user->blockedBy() );
+		$this->assertSame( '', $user->blockedFor() );
+		$this->assertFalse( (bool)$user->isHidden() );
+		$this->assertFalse( $user->isBlockedFrom( $ut ) );
+	}
+
+	/**
+	 * Block cookie should be set for IP Blocks if
+	 * wgCookieSetOnIpBlock is set to true
+	 */
+	public function testIpBlockCookieSet() {
+		$this->setMwGlobals( [
+			'wgCookieSetOnIpBlock' => true,
+			'wgCookiePrefix' => 'wiki',
+			'wgSecretKey' => MWCryptRand::generateHex( 64, true ),
+		] );
+
+		// setup block
+		$block = new Block( [
+			'expiry' => wfTimestamp( TS_MW, wfTimestamp() + ( 5 * 60 * 60 ) ),
+		] );
+		$block->setTarget( '1.2.3.4' );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
+		$block->insert();
+
+		// setup request
+		$request = new FauxRequest();
+		$request->setIP( '1.2.3.4' );
+
+		// get user
+		$user = User::newFromSession( $request );
+		$user->trackBlockWithCookie();
+
+		// test cookie was set
+		$cookies = $request->response()->getCookies();
+		$this->assertArrayHasKey( 'wikiBlockID', $cookies );
+
+		// clean up
+		$block->delete();
+	}
+
+	/**
+	 * Block cookie should NOT be set when wgCookieSetOnIpBlock
+	 * is disabled
+	 */
+	public function testIpBlockCookieNotSet() {
+		$this->setMwGlobals( [
+			'wgCookieSetOnIpBlock' => false,
+			'wgCookiePrefix' => 'wiki',
+			'wgSecretKey' => MWCryptRand::generateHex( 64, true ),
+		] );
+
+		// setup block
+		$block = new Block( [
+			'expiry' => wfTimestamp( TS_MW, wfTimestamp() + ( 5 * 60 * 60 ) ),
+		] );
+		$block->setTarget( '1.2.3.4' );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
+		$block->insert();
+
+		// setup request
+		$request = new FauxRequest();
+		$request->setIP( '1.2.3.4' );
+
+		// get user
+		$user = User::newFromSession( $request );
+		$user->trackBlockWithCookie();
+
+		// test cookie was not set
+		$cookies = $request->response()->getCookies();
+		$this->assertArrayNotHasKey( 'wikiBlockID', $cookies );
+
+		// clean up
+		$block->delete();
+	}
+
+	/**
+	 * When an ip user is blocked and then they log in, cookie block
+	 * should be invalid and the cookie removed.
+	 */
+	public function testIpBlockCookieIgnoredWhenUserLoggedIn() {
+		$this->setMwGlobals( [
+			'wgAutoblockExpiry' => 8000,
+			'wgCookieSetOnIpBlock' => true,
+			'wgCookiePrefix' => 'wiki',
+			'wgSecretKey' => MWCryptRand::generateHex( 64, true ),
+		] );
+
+		// setup block
+		$block = new Block( [
+			'expiry' => wfTimestamp( TS_MW, wfTimestamp() + ( 40 * 60 * 60 ) ),
+		] );
+		$block->setTarget( '1.2.3.4' );
+		$block->setBlocker( $this->getTestSysop()->getUser() );
+		$block->insert();
+
+		// setup request
+		$request = new FauxRequest();
+		$request->setIP( '1.2.3.4' );
+		$request->getSession()->setUser( $this->getTestUser()->getUser() );
+		$request->setCookie( 'BlockID', $block->getCookieValue() );
+
+		// setup user
+		$user = User::newFromSession( $request );
+
+		// logged in users should be inmune to cookie block of type ip/range
+		$this->assertFalse( $user->isBlocked() );
+
+		// cookie is being cleared
+		$cookies = $request->response()->getCookies();
+		$this->assertEquals( '', $cookies['wikiBlockID']['value'] );
+
+		// clean up
+		$block->delete();
 	}
 }

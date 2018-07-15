@@ -45,7 +45,21 @@ interface UserIdentity {
 	 */
 	public function getName();
 
-	// TODO: in the future, we should also provide access to the actor ID here.
+	/**
+	 * @since 1.31
+	 *
+	 * @return int The user's actor ID. May be 0 if no actor ID is set.
+	 */
+	public function getActorId();
+
 	// TODO: we may want to (optionally?) provide a global ID, see CentralIdLookup.
+
+	/**
+	 * @since 1.32
+	 *
+	 * @param UserIdentity $user
+	 * @return bool
+	 */
+	public function equals( UserIdentity $user );
 
 }

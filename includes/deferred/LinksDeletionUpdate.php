@@ -90,28 +90,19 @@ class LinksDeletionUpdate extends DataUpdate implements EnqueueableDataUpdate {
 		foreach ( $catBatches as $catBatch ) {
 			$this->page->updateCategoryCounts( [], $catBatch, $id );
 			if ( count( $catBatches ) > 1 ) {
+				// Only sacrifice atomicity if necessary due to size
 				$lbFactory->commitAndWaitForReplication(
 					__METHOD__, $this->ticket, [ 'domain' => $dbw->getDomainID() ]
 				);
 			}
 		}
 
-		// Refresh the category table entry if it seems to have no pages. Check
-		// master for the most up-to-date cat_pages count.
+		// Refresh counts on categories that should be empty now
 		if ( $title->getNamespace() === NS_CATEGORY ) {
-			$row = $dbw->selectRow(
-				'category',
-				[ 'cat_id', 'cat_title', 'cat_pages', 'cat_subcats', 'cat_files' ],
-				[ 'cat_title' => $title->getDBkey(), 'cat_pages <= 0' ],
-				__METHOD__
-			);
-			if ( $row ) {
-				$cat = Category::newFromRow( $row, $title );
-				// T166757: do the update after the main job DB commit
-				DeferredUpdates::addCallableUpdate( function () use ( $cat ) {
-					$cat->refreshCounts();
-				} );
-			}
+			// T166757: do the update after the main job DB commit
+			DeferredUpdates::addCallableUpdate( function () use ( $title ) {
+				$this->refreshCategoryIfEmpty( $title );
+			} );
 		}
 
 		$this->batchDeleteByPK(
@@ -194,6 +185,35 @@ class LinksDeletionUpdate extends DataUpdate implements EnqueueableDataUpdate {
 
 		// Commit and release the lock (if set)
 		ScopedCallback::consume( $scopedLock );
+	}
+
+	/**
+	 * @param Title $title
+	 */
+	private function refreshCategoryIfEmpty( Title $title ) {
+		$dbw = $this->getDB();
+
+		$row = $dbw->selectRow(
+			'category',
+			[ 'cat_id', 'cat_title', 'cat_pages', 'cat_subcats', 'cat_files' ],
+			[ 'cat_title' => $title->getDBkey(), 'cat_pages <= 100' ],
+			__METHOD__
+		);
+
+		if ( !$row ) {
+			return; // nothing to delete
+		}
+
+		$cat = Category::newFromRow( $row, $title );
+		$hasLink = $dbw->selectField(
+			'categorylinks',
+			'1',
+			[ 'cl_to' => $title->getDBkey() ],
+			__METHOD__
+		);
+		if ( !$hasLink ) {
+			$cat->refreshCounts(); // delete the category table entry
+		}
 	}
 
 	private function batchDeleteByPK( $table, array $conds, array $pk, $bSize ) {

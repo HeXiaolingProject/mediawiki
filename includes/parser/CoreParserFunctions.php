@@ -112,7 +112,7 @@ class CoreParserFunctions {
 	/**
 	 * @param Parser $parser
 	 * @param string $date
-	 * @param string $defaultPref
+	 * @param string|null $defaultPref
 	 *
 	 * @return string
 	 */
@@ -165,7 +165,7 @@ class CoreParserFunctions {
 	 *
 	 * @param Parser $parser
 	 * @param string $s The text to encode.
-	 * @param string $arg (optional): The type of encoding.
+	 * @param string|null $arg (optional): The type of encoding.
 	 * @return string
 	 */
 	public static function urlencode( $parser, $s = '', $arg = null ) {
@@ -292,7 +292,7 @@ class CoreParserFunctions {
 	/**
 	 * @param Parser $parser
 	 * @param string $num
-	 * @param string $arg
+	 * @param string|null $arg
 	 * @return string
 	 */
 	public static function formatnum( $parser, $num = '', $arg = null ) {
@@ -337,8 +337,8 @@ class CoreParserFunctions {
 		// default
 		$gender = User::getDefaultOption( 'gender' );
 
-		// allow prefix.
-		$title = Title::newFromText( $username );
+		// allow prefix and normalize (e.g. "&#42;foo" -> "*foo" ).
+		$title = Title::newFromText( $username, NS_USER );
 
 		if ( $title && $title->inNamespace( NS_USER ) ) {
 			$username = $title->getText();
@@ -449,7 +449,7 @@ class CoreParserFunctions {
 				$parser->mOutput->setDisplayTitle( $text );
 			}
 			if ( $old !== false && $old !== $text && !$arg ) {
-				$converter = $parser->getConverterLanguage()->getConverter();
+				$converter = $parser->getTargetLanguage()->getConverter();
 				return '<span class="error">' .
 					wfMessage( 'duplicate-displaytitle',
 						// Message should be parsed, but these params should only be escaped.
@@ -461,7 +461,7 @@ class CoreParserFunctions {
 				return '';
 			}
 		} else {
-			$converter = $parser->getConverterLanguage()->getConverter();
+			$converter = $parser->getTargetLanguage()->getConverter();
 			$parser->getOutput()->addWarning(
 				wfMessage( 'restricted-displaytitle',
 					// Message should be parsed, but this param should only be escaped.
@@ -556,7 +556,7 @@ class CoreParserFunctions {
 	 * Note: function name changed to "mwnamespace" rather than "namespace"
 	 * to not break PHP 5.3
 	 * @param Parser $parser
-	 * @param string $title
+	 * @param string|null $title
 	 * @return mixed|string
 	 */
 	public static function mwnamespace( $parser, $title = null ) {
@@ -613,7 +613,7 @@ class CoreParserFunctions {
 	 * Functions to get and normalize pagenames, corresponding to the magic words
 	 * of the same names
 	 * @param Parser $parser
-	 * @param string $title
+	 * @param string|null $title
 	 * @return string
 	 */
 	public static function pagename( $parser, $title = null ) {
@@ -721,8 +721,8 @@ class CoreParserFunctions {
 	 * can't be called too many times per page.
 	 * @param Parser $parser
 	 * @param string $name
-	 * @param string $arg1
-	 * @param string $arg2
+	 * @param string|null $arg1
+	 * @param string|null $arg2
 	 * @return string
 	 */
 	public static function pagesincategory( $parser, $name = '', $arg1 = null, $arg2 = null ) {
@@ -789,7 +789,7 @@ class CoreParserFunctions {
 	 *
 	 * @param Parser $parser
 	 * @param string $page Name of page to check (Default: empty string)
-	 * @param string $raw Should number be human readable with commas or just number
+	 * @param string|null $raw Should number be human readable with commas or just number
 	 * @return string
 	 */
 	public static function pagesize( $parser, $page = '', $raw = null ) {
@@ -830,7 +830,7 @@ class CoreParserFunctions {
 			$restrictions = $titleObject->getRestrictions( strtolower( $type ) );
 			# Title::getRestrictions returns an array, its possible it may have
 			# multiple values in the future
-			return implode( $restrictions, ',' );
+			return implode( ',', $restrictions );
 		}
 		return '';
 	}
@@ -882,7 +882,7 @@ class CoreParserFunctions {
 	 * Unicode-safe str_pad with the restriction that $length is forced to be <= 500
 	 * @param Parser $parser
 	 * @param string $string
-	 * @param int $length
+	 * @param string $length
 	 * @param string $padding
 	 * @param int $direction
 	 * @return string
@@ -897,7 +897,12 @@ class CoreParserFunctions {
 		}
 
 		# The remaining length to add counts down to 0 as padding is added
-		$length = min( $length, 500 ) - mb_strlen( $string );
+		$length = min( (int)$length, 500 ) - mb_strlen( $string );
+		if ( $length <= 0 ) {
+			// Nothing to add
+			return $string;
+		}
+
 		# $finalPadding is just $padding repeated enough times so that
 		# mb_strlen( $string ) + mb_strlen( $finalPadding ) == $length
 		$finalPadding = '';
@@ -977,7 +982,7 @@ class CoreParserFunctions {
 		if ( $old === false || $old == $text || $arg ) {
 			return '';
 		} else {
-			$converter = $parser->getConverterLanguage()->getConverter();
+			$converter = $parser->getTargetLanguage()->getConverter();
 			return '<span class="error">' .
 				wfMessage( 'duplicate-defaultsort',
 					// Message should be parsed, but these params should only be escaped.
@@ -1005,10 +1010,10 @@ class CoreParserFunctions {
 		if ( $argA == 'nowiki' ) {
 			// {{filepath: | option [| size] }}
 			$isNowiki = true;
-			$parsedWidthParam = $parser->parseWidthParam( $argB );
+			$parsedWidthParam = Parser::parseWidthParam( $argB );
 		} else {
 			// {{filepath: [| size [|option]] }}
-			$parsedWidthParam = $parser->parseWidthParam( $argA );
+			$parsedWidthParam = Parser::parseWidthParam( $argA );
 			$isNowiki = ( $argB == 'nowiki' );
 		}
 
@@ -1059,7 +1064,7 @@ class CoreParserFunctions {
 				$name = trim( $frame->expand( $bits['name'], PPFrame::STRIP_COMMENTS ) );
 				$value = trim( $frame->expand( $bits['value'] ) );
 				if ( preg_match( '/^(?:["\'](.+)["\']|""|\'\')$/s', $value, $m ) ) {
-					$value = isset( $m[1] ) ? $m[1] : '';
+					$value = $m[1] ?? '';
 				}
 				$attributes[$name] = $value;
 			}
@@ -1136,7 +1141,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the pageid of a specified page
 	 * @param Parser $parser
-	 * @param string $title Title to get the pageid from
+	 * @param string|null $title Title to get the pageid from
 	 * @return int|null|string
 	 * @since 1.23
 	 */
@@ -1157,7 +1162,7 @@ class CoreParserFunctions {
 		}
 
 		// Check the link cache, maybe something already looked it up.
-		$linkCache = LinkCache::singleton();
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
 		$pdbk = $t->getPrefixedDBkey();
 		$id = $linkCache->getGoodLinkID( $pdbk );
 		if ( $id != 0 ) {
@@ -1181,7 +1186,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the id from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the id from
+	 * @param string|null $title Title to get the id from
 	 * @return int|null|string
 	 * @since 1.23
 	 */
@@ -1198,7 +1203,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the day from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the day from
+	 * @param string|null $title Title to get the day from
 	 * @return string
 	 * @since 1.23
 	 */
@@ -1215,7 +1220,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the day with leading zeros from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the day from
+	 * @param string|null $title Title to get the day from
 	 * @return string
 	 * @since 1.23
 	 */
@@ -1232,7 +1237,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the month with leading zeros from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the month from
+	 * @param string|null $title Title to get the month from
 	 * @return string
 	 * @since 1.23
 	 */
@@ -1249,7 +1254,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the month from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the month from
+	 * @param string|null $title Title to get the month from
 	 * @return string
 	 * @since 1.23
 	 */
@@ -1266,7 +1271,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the year from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the year from
+	 * @param string|null $title Title to get the year from
 	 * @return string
 	 * @since 1.23
 	 */
@@ -1283,7 +1288,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the timestamp from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the timestamp from
+	 * @param string|null $title Title to get the timestamp from
 	 * @return string
 	 * @since 1.23
 	 */
@@ -1300,7 +1305,7 @@ class CoreParserFunctions {
 	/**
 	 * Get the user from the last revision of a specified page.
 	 * @param Parser $parser
-	 * @param string $title Title to get the user from
+	 * @param string|null $title Title to get the user from
 	 * @return string
 	 * @since 1.23
 	 */
@@ -1339,7 +1344,7 @@ class CoreParserFunctions {
 			foreach ( $sources[0] as $sourceTitle ) {
 				$names[] = $sourceTitle->getPrefixedText();
 			}
-			return implode( $names, '|' );
+			return implode( '|', $names );
 		}
 		return '';
 	}

@@ -11,7 +11,7 @@ require_once $basePath . '/maintenance/Maintenance.php';
  *
  * @since 1.29
  *
- * @license GNU GPL v2+
+ * @license GPL-2.0-or-later
  * @author Florian Schmidt
  */
 class AddSite extends Maintenance {
@@ -88,5 +88,5 @@ class AddSite extends Maintenance {
 	}
 }
 
-$maintClass = 'AddSite';
+$maintClass = AddSite::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

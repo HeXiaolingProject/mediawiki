@@ -90,7 +90,7 @@ class MediaWiki {
 			}
 			// Check variant links so that interwiki links don't have to worry
 			// about the possible different language variants
-			if ( count( $wgContLang->getVariants() ) > 1
+			if ( $wgContLang->hasVariants()
 				&& !is_null( $ret ) && $ret->getArticleID() == 0
 			) {
 				$wgContLang->findVariantLink( $title, $ret );
@@ -104,7 +104,7 @@ class MediaWiki {
 		if ( $ret === null || !$ret->isSpecialPage() ) {
 			// We can have urls with just ?diff=,?oldid= or even just ?diff=
 			$oldid = $request->getInt( 'oldid' );
-			$oldid = $oldid ? $oldid : $request->getInt( 'diff' );
+			$oldid = $oldid ?: $request->getInt( 'diff' );
 			// Allow oldid to override a changed or missing title
 			if ( $oldid ) {
 				$rev = Revision::newFromId( $oldid );
@@ -426,7 +426,7 @@ class MediaWiki {
 			// If $target is set, then a hook wanted to redirect.
 			if ( !$ignoreRedirect && ( $target || $page->isRedirect() ) ) {
 				// Is the target already set by an extension?
-				$target = $target ? $target : $page->followRedirect();
+				$target = $target ?: $page->followRedirect();
 				if ( is_string( $target ) ) {
 					if ( !$this->config->get( 'DisableHardRedirects' ) ) {
 						// we'll need to redirect
@@ -549,6 +549,9 @@ class MediaWiki {
 			}
 
 			MWExceptionHandler::handleException( $e );
+		} catch ( Error $e ) {
+			// Type errors and such: at least handle it now and clean up the LBFactory state
+			MWExceptionHandler::handleException( $e );
 		}
 
 		$this->doPostOutputShutdown( 'normal' );
@@ -565,7 +568,7 @@ class MediaWiki {
 
 	/**
 	 * @see MediaWiki::preOutputCommit()
-	 * @param callable $postCommitWork [default: null]
+	 * @param callable|null $postCommitWork [default: null]
 	 * @since 1.26
 	 */
 	public function doPreOutputCommit( callable $postCommitWork = null ) {
@@ -577,7 +580,7 @@ class MediaWiki {
 	 * the user can receive a response (in case commit fails)
 	 *
 	 * @param IContextSource $context
-	 * @param callable $postCommitWork [default: null]
+	 * @param callable|null $postCommitWork [default: null]
 	 * @since 1.27
 	 */
 	public static function preOutputCommit(
@@ -628,14 +631,17 @@ class MediaWiki {
 
 		// Record ChronologyProtector positions for DBs affected in this request at this point
 		$cpIndex = null;
-		$lbFactory->shutdown( $flags, $postCommitWork, $cpIndex );
+		$cpClientId = null;
+		$lbFactory->shutdown( $flags, $postCommitWork, $cpIndex, $cpClientId );
 		wfDebug( __METHOD__ . ': LBFactory shutdown completed' );
 
 		if ( $cpIndex > 0 ) {
 			if ( $allowHeaders ) {
-				$expires = time() + ChronologyProtector::POSITION_TTL;
+				$now = time();
+				$expires = $now + ChronologyProtector::POSITION_COOKIE_TTL;
 				$options = [ 'prefix' => '' ];
-				$request->response()->setCookie( 'cpPosIndex', $cpIndex, $expires, $options );
+				$value = LBFactory::makeCookieValueFromCPIndex( $cpIndex, $now, $cpClientId );
+				$request->response()->setCookie( 'cpPosIndex', $value, $expires, $options );
 			}
 
 			if ( $strategy === 'cookie+url' ) {
@@ -717,6 +723,9 @@ class MediaWiki {
 			MWExceptionHandler::rollbackMasterChangesAndLog( $e );
 		}
 
+		// Disable WebResponse setters for post-send processing (T191537).
+		WebResponse::disableForPostSend();
+
 		$blocksHttpClient = true;
 		// Defer everything else if possible...
 		$callback = function () use ( $mode, &$blocksHttpClient ) {
@@ -755,7 +764,7 @@ class MediaWiki {
 		$request = $this->context->getRequest();
 
 		// Send Ajax requests to the Ajax dispatcher.
-		if ( $this->config->get( 'UseAjax' ) && $request->getVal( 'action' ) === 'ajax' ) {
+		if ( $request->getVal( 'action' ) === 'ajax' ) {
 			// Set a dummy title, because $wgTitle == null might break things
 			$title = Title::makeTitle( NS_SPECIAL, 'Badtitle/performing an AJAX call in '
 				. __METHOD__
@@ -858,7 +867,7 @@ class MediaWiki {
 		$this->performRequest();
 
 		// GUI-ify and stash the page output in MediaWiki::doPreOutputCommit() while
-		// ChronologyProtector synchronizes DB positions or slaves accross all datacenters.
+		// ChronologyProtector synchronizes DB positions or replicas accross all datacenters.
 		$buffer = null;
 		$outputWork = function () use ( $output, &$buffer ) {
 			if ( $buffer === null ) {
@@ -934,7 +943,7 @@ class MediaWiki {
 			try {
 				$statsdServer = explode( ':', $config->get( 'StatsdServer' ) );
 				$statsdHost = $statsdServer[0];
-				$statsdPort = isset( $statsdServer[1] ) ? $statsdServer[1] : 8125;
+				$statsdPort = $statsdServer[1] ?? 8125;
 				$statsdSender = new SocketSender( $statsdHost, $statsdPort );
 				$statsdClient = new SamplingStatsdClient( $statsdSender, true, false );
 				$statsdClient->setSamplingRates( $config->get( 'StatsdSamplingRates' ) );
@@ -995,8 +1004,14 @@ class MediaWiki {
 	 * @param LoggerInterface $runJobsLogger
 	 */
 	private function triggerSyncJobs( $n, LoggerInterface $runJobsLogger ) {
-		$runner = new JobRunner( $runJobsLogger );
-		$runner->run( [ 'maxJobs' => $n ] );
+		$trxProfiler = Profiler::instance()->getTransactionProfiler();
+		$old = $trxProfiler->setSilenced( true );
+		try {
+			$runner = new JobRunner( $runJobsLogger );
+			$runner->run( [ 'maxJobs' => $n ] );
+		} finally {
+			$trxProfiler->setSilenced( $old );
+		}
 	}
 
 	/**
@@ -1028,7 +1043,7 @@ class MediaWiki {
 			$port = $info['port'];
 		}
 
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$sock = $host ? fsockopen(
 			$host,
 			$port,
@@ -1037,7 +1052,7 @@ class MediaWiki {
 			// If it takes more than 100ms to connect to ourselves there is a problem...
 			0.100
 		) : false;
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		$invokedWithSuccess = true;
 		if ( $sock ) {

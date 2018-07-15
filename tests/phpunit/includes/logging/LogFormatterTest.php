@@ -53,8 +53,8 @@ class LogFormatterTest extends MediaWikiLangTestCase {
 
 		$this->setMwGlobals( [
 			'wgLogTypes' => [ 'phpunit' ],
-			'wgLogActionsHandlers' => [ 'phpunit/test' => 'LogFormatter',
-				'phpunit/param' => 'LogFormatter' ],
+			'wgLogActionsHandlers' => [ 'phpunit/test' => LogFormatter::class,
+				'phpunit/param' => LogFormatter::class ],
 			'wgUser' => User::newFromName( 'Testuser' ),
 		] );
 
@@ -91,10 +91,11 @@ class LogFormatterTest extends MediaWikiLangTestCase {
 
 		$formatter->setShowUserToolLinks( false );
 		$paramsWithoutTools = $formatter->getMessageParametersForTesting();
-		unset( $formatter->parsedParameters );
 
-		$formatter->setShowUserToolLinks( true );
-		$paramsWithTools = $formatter->getMessageParametersForTesting();
+		$formatter2 = LogFormatter::newFromEntry( $entry );
+		$formatter2->setContext( $this->context );
+		$formatter2->setShowUserToolLinks( true );
+		$paramsWithTools = $formatter2->getMessageParametersForTesting();
 
 		$userLink = Linker::userLink(
 			$this->user->getId(),

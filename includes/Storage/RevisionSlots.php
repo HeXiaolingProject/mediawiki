@@ -54,6 +54,8 @@ class RevisionSlots {
 	 * @param SlotRecord[] $slots
 	 */
 	private function setSlotsInternal( array $slots ) {
+		Assert::parameterElementType( SlotRecord::class, $slots, '$slots' );
+
 		$this->slots = [];
 
 		// re-key the slot array
@@ -108,6 +110,19 @@ class RevisionSlots {
 		} else {
 			throw new RevisionAccessException( 'No such slot: ' . $role );
 		}
+	}
+
+	/**
+	 * Returns whether the given slot is set.
+	 *
+	 * @param string $role The role name of the desired slot
+	 *
+	 * @return bool
+	 */
+	public function hasSlot( $role ) {
+		$slots = $this->getSlots();
+
+		return isset( $slots[$role] );
 	}
 
 	/**
@@ -184,6 +199,114 @@ class RevisionSlots {
 				? $slot->getSha1()
 				: SlotRecord::base36Sha1( $accu . $slot->getSha1() );
 		}, null );
+	}
+
+	/**
+	 * Return all slots that belong to the revision they originate from (that is,
+	 * they are not inherited from some other revision).
+	 *
+	 * @note This may cause the slot meta-data for the revision to be lazy-loaded.
+	 *
+	 * @return SlotRecord[]
+	 */
+	public function getOriginalSlots() {
+		return array_filter(
+			$this->getSlots(),
+			function ( SlotRecord $slot ) {
+				return !$slot->isInherited();
+			}
+		);
+	}
+
+	/**
+	 * Return all slots that are not not originate in the revision they belong to (that is,
+	 * they are inherited from some other revision).
+	 *
+	 * @note This may cause the slot meta-data for the revision to be lazy-loaded.
+	 *
+	 * @return SlotRecord[]
+	 */
+	public function getInheritedSlots() {
+		return array_filter(
+			$this->getSlots(),
+			function ( SlotRecord $slot ) {
+				return $slot->isInherited();
+			}
+		);
+	}
+
+	/**
+	 * Checks whether the other RevisionSlots instance has the same content
+	 * as this instance. Note that this does not mean that the slots have to be the same:
+	 * they could for instance belong to different revisions.
+	 *
+	 * @param RevisionSlots $other
+	 *
+	 * @return bool
+	 */
+	public function hasSameContent( RevisionSlots $other ) {
+		if ( $other === $this ) {
+			return true;
+		}
+
+		$aSlots = $this->getSlots();
+		$bSlots = $other->getSlots();
+
+		ksort( $aSlots );
+		ksort( $bSlots );
+
+		if ( array_keys( $aSlots ) !== array_keys( $bSlots ) ) {
+			return false;
+		}
+
+		foreach ( $aSlots as $role => $s ) {
+			$t = $bSlots[$role];
+
+			if ( !$s->hasSameContent( $t ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Find roles for which the $other RevisionSlots object has different content
+	 * as this RevisionSlots object, including any roles that are present in one
+	 * but not the other.
+	 *
+	 * @param RevisionSlots $other
+	 *
+	 * @return string[] a list of slot roles that are different.
+	 */
+	public function getRolesWithDifferentContent( RevisionSlots $other ) {
+		if ( $other === $this ) {
+			return [];
+		}
+
+		$aSlots = $this->getSlots();
+		$bSlots = $other->getSlots();
+
+		ksort( $aSlots );
+		ksort( $bSlots );
+
+		$different = array_keys( array_merge(
+			array_diff_key( $aSlots, $bSlots ),
+			array_diff_key( $bSlots, $aSlots )
+		) );
+
+		/** @var SlotRecord[] $common */
+		$common = array_intersect_key( $aSlots, $bSlots );
+
+		foreach ( $common as $role => $s ) {
+			$t = $bSlots[$role];
+
+			if ( !$s->hasSameContent( $t ) ) {
+				$different[] = $role;
+			}
+		}
+
+		return $different;
 	}
 
 }

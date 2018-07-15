@@ -140,7 +140,7 @@ class RepoGroup {
 			&& empty( $options['private'] )
 			&& empty( $options['latest'] )
 		) {
-			$time = isset( $options['time'] ) ? $options['time'] : '';
+			$time = $options['time'] ?? '';
 			if ( $this->cache->has( $dbkey, $time, 60 ) ) {
 				return $this->cache->get( $dbkey, $time );
 			}
@@ -163,7 +163,7 @@ class RepoGroup {
 			}
 		}
 
-		$image = $image ? $image : false; // type sanity
+		$image = $image ?: false; // type sanity
 		# Cache file existence or non-existence
 		if ( $useCache && ( !$image || $image->isCacheable() ) ) {
 			$this->cache->set( $dbkey, $time, $image );
@@ -324,11 +324,8 @@ class RepoGroup {
 		}
 		if ( $index === 'local' ) {
 			return $this->localRepo;
-		} elseif ( isset( $this->foreignRepos[$index] ) ) {
-			return $this->foreignRepos[$index];
-		} else {
-			return false;
 		}
+		return $this->foreignRepos[$index] ?? false;
 	}
 
 	/**
@@ -372,8 +369,7 @@ class RepoGroup {
 			$this->initialiseRepos();
 		}
 		foreach ( $this->foreignRepos as $repo ) {
-			$args = array_merge( [ $repo ], $params );
-			if ( call_user_func_array( $callback, $args ) ) {
+			if ( $callback( $repo, ...$params ) ) {
 				return true;
 			}
 		}
@@ -423,7 +419,7 @@ class RepoGroup {
 	 * Split a virtual URL into repo, zone and rel parts
 	 * @param string $url
 	 * @throws MWException
-	 * @return array Containing repo, zone and rel
+	 * @return string[] Containing repo, zone and rel
 	 */
 	function splitVirtualUrl( $url ) {
 		if ( substr( $url, 0, 9 ) != 'mwrepo://' ) {

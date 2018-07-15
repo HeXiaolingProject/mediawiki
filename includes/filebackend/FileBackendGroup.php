@@ -79,19 +79,13 @@ class FileBackendGroup {
 			$repoName = $info['name'];
 			// Local vars that used to be FSRepo members...
 			$directory = $info['directory'];
-			$deletedDir = isset( $info['deletedDir'] )
-				? $info['deletedDir']
-				: false; // deletion disabled
-			$thumbDir = isset( $info['thumbDir'] )
-				? $info['thumbDir']
-				: "{$directory}/thumb";
-			$transcodedDir = isset( $info['transcodedDir'] )
-				? $info['transcodedDir']
-				: "{$directory}/transcoded";
+			$deletedDir = $info['deletedDir'] ?? false; // deletion disabled
+			$thumbDir = $info['thumbDir'] ?? "{$directory}/thumb";
+			$transcodedDir = $info['transcodedDir'] ?? "{$directory}/transcoded";
 			// Get the FS backend configuration
 			$autoBackends[] = [
 				'name' => $backendName,
-				'class' => 'FSFileBackend',
+				'class' => FSFileBackend::class,
 				'lockManager' => 'fsLockManager',
 				'containerPaths' => [
 					"{$repoName}-public" => "{$directory}",
@@ -100,7 +94,7 @@ class FileBackendGroup {
 					"{$repoName}-deleted" => $deletedDir,
 					"{$repoName}-temp" => "{$directory}/temp"
 				],
-				'fileMode' => isset( $info['fileMode'] ) ? $info['fileMode'] : 0644,
+				'fileMode' => $info['fileMode'] ?? 0644,
 				'directoryMode' => $wgDirectoryMode,
 			];
 		}
@@ -112,7 +106,7 @@ class FileBackendGroup {
 	/**
 	 * Register an array of file backend configurations
 	 *
-	 * @param array $configs
+	 * @param array[] $configs
 	 * @param string|null $readOnlyReason
 	 * @throws InvalidArgumentException
 	 */
@@ -155,7 +149,7 @@ class FileBackendGroup {
 			$config = $this->config( $name );
 
 			$class = $config['class'];
-			if ( $class === 'FileBackendMultiWrite' ) {
+			if ( $class === FileBackendMultiWrite::class ) {
 				foreach ( $config['backends'] as $index => $beConfig ) {
 					if ( isset( $beConfig['template'] ) ) {
 						// Config is just a modified version of a registered backend's.
@@ -190,9 +184,9 @@ class FileBackendGroup {
 			'wikiId' => wfWikiID(), // e.g. "my_wiki-en_"
 			'mimeCallback' => [ $this, 'guessMimeInternal' ],
 			'obResetFunc' => 'wfResetOutputBuffers',
-			'streamMimeFunc' => [ 'StreamFile', 'contentTypeFromPath' ],
+			'streamMimeFunc' => [ StreamFile::class, 'contentTypeFromPath' ],
 			'tmpDirectory' => wfTempDir(),
-			'statusWrapper' => [ 'Status', 'wrap' ],
+			'statusWrapper' => [ Status::class, 'wrap' ],
 			'wanCache' => MediaWikiServices::getInstance()->getMainWANObjectCache(),
 			'srvCache' => ObjectCache::getLocalServerInstance( 'hash' ),
 			'logger' => LoggerFactory::getInstance( 'FileOperation' ),
@@ -202,7 +196,7 @@ class FileBackendGroup {
 			LockManagerGroup::singleton( $config['wikiId'] )->get( $config['lockManager'] );
 		$config['fileJournal'] = isset( $config['fileJournal'] )
 			? FileJournal::factory( $config['fileJournal'], $name )
-			: FileJournal::factory( [ 'class' => 'NullFileJournal' ], $name );
+			: FileJournal::factory( [ 'class' => NullFileJournal::class ], $name );
 
 		return $config;
 	}

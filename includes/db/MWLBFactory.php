@@ -23,6 +23,7 @@
 
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
+use Wikimedia\Rdbms\LBFactory;
 use Wikimedia\Rdbms\DatabaseDomain;
 
 /**
@@ -30,6 +31,10 @@ use Wikimedia\Rdbms\DatabaseDomain;
  * @ingroup Database
  */
 abstract class MWLBFactory {
+
+	/** @var array Cache of already-logged deprecation messages */
+	private static $loggedDeprecations = [];
+
 	/**
 	 * @param array $lbConf Config for LBFactory::__construct()
 	 * @param Config $mainConfig Main config object from MediaWikiServices
@@ -46,7 +51,7 @@ abstract class MWLBFactory {
 		$lbConf += [
 			'localDomain' => new DatabaseDomain(
 				$mainConfig->get( 'DBname' ),
-				null,
+				$mainConfig->get( 'DBmwschema' ),
 				$mainConfig->get( 'DBprefix' )
 			),
 			'profiler' => Profiler::instance(),
@@ -56,15 +61,17 @@ abstract class MWLBFactory {
 			'connLogger' => LoggerFactory::getInstance( 'DBConnection' ),
 			'perfLogger' => LoggerFactory::getInstance( 'DBPerformance' ),
 			'errorLogger' => [ MWExceptionHandler::class, 'logException' ],
+			'deprecationLogger' => [ static::class, 'logDeprecation' ],
 			'cliMode' => $wgCommandLineMode,
 			'hostname' => wfHostname(),
 			'readOnlyReason' => $readOnlyMode->getReason(),
+			'defaultGroup' => $mainConfig->get( 'DBDefaultGroup' ),
 		];
 
 		// When making changes here, remember to also specify MediaWiki-specific options
 		// for Database classes in the relevant Installer subclass.
 		// Such as MysqlInstaller::openConnection and PostgresInstaller::openConnectionWithParams.
-		if ( $lbConf['class'] === 'LBFactorySimple' ) {
+		if ( $lbConf['class'] === Wikimedia\Rdbms\LBFactorySimple::class ) {
 			if ( isset( $lbConf['servers'] ) ) {
 				// Server array is already explicitly configured; leave alone
 			} elseif ( is_array( $mainConfig->get( 'DBservers' ) ) ) {
@@ -132,7 +139,7 @@ abstract class MWLBFactory {
 			if ( !isset( $lbConf['externalClusters'] ) ) {
 				$lbConf['externalClusters'] = $mainConfig->get( 'ExternalServers' );
 			}
-		} elseif ( $lbConf['class'] === 'LBFactoryMulti' ) {
+		} elseif ( $lbConf['class'] === Wikimedia\Rdbms\LBFactoryMulti::class ) {
 			if ( isset( $lbConf['serverTemplate'] ) ) {
 				if ( in_array( $lbConf['serverTemplate']['type'], $typesWithSchema, true ) ) {
 					$lbConf['serverTemplate']['schema'] = $mainConfig->get( 'DBmwschema' );
@@ -200,5 +207,47 @@ abstract class MWLBFactory {
 		}
 
 		return $class;
+	}
+
+	public static function setSchemaAliases( LBFactory $lbFactory, Config $config ) {
+		if ( $config->get( 'DBtype' ) === 'mysql' ) {
+			/**
+			 * When SQLite indexes were introduced in r45764, it was noted that
+			 * SQLite requires index names to be unique within the whole database,
+			 * not just within a schema. As discussed in CR r45819, to avoid the
+			 * need for a schema change on existing installations, the indexes
+			 * were implicitly mapped from the new names to the old names.
+			 *
+			 * This mapping can be removed if DB patches are introduced to alter
+			 * the relevant tables in existing installations. Note that because
+			 * this index mapping applies to table creation, even new installations
+			 * of MySQL have the old names (except for installations created during
+			 * a period where this mapping was inappropriately removed, see
+			 * T154872).
+			 */
+			$lbFactory->setIndexAliases( [
+				'ar_usertext_timestamp' => 'usertext_timestamp',
+				'un_user_id' => 'user_id',
+				'un_user_ip' => 'user_ip',
+			] );
+		}
+	}
+
+	/**
+	 * Log a database deprecation warning
+	 * @param string $msg Deprecation message
+	 */
+	public static function logDeprecation( $msg ) {
+		global $wgDevelopmentWarnings;
+
+		if ( isset( self::$loggedDeprecations[$msg] ) ) {
+			return;
+		}
+		self::$loggedDeprecations[$msg] = true;
+
+		if ( $wgDevelopmentWarnings ) {
+			trigger_error( $msg, E_USER_DEPRECATED );
+		}
+		wfDebugLog( 'deprecated', $msg, 'private' );
 	}
 }

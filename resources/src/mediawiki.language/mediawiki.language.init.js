@@ -13,8 +13,8 @@
 	mw.language = {
 		/**
 		 * Language-related data (keyed by language, contains instances of mw.Map).
-		 * Loaded dynamically (see ResourceLoaderLanguageDataModule class in PHP, registered
-		 * as mediawiki.language.data on the client).
+		 *
+		 * Exported dynamically by the ResourceLoaderLanguageDataModule class in PHP.
 		 *
 		 * To set data:
 		 *
@@ -32,10 +32,13 @@
 		 *
 		 *  - `digitTransformTable`
 		 *  - `separatorTransformTable`
+		 *  - `minimumGroupingDigits`
 		 *  - `grammarForms`
 		 *  - `pluralRules`
 		 *  - `digitGroupingPattern`
 		 *  - `fallbackLanguages`
+		 *  - `bcp47Map`
+		 *  - `languageNames`
 		 *
 		 * @property
 		 */
@@ -76,7 +79,11 @@
 			if ( !( langData[ langCode ] instanceof mw.Map ) ) {
 				langData[ langCode ] = new mw.Map();
 			}
-			langData[ langCode ].set( dataKey, value );
+			if ( arguments.length > 2 ) {
+				langData[ langCode ].set( dataKey, value );
+			} else {
+				langData[ langCode ].set( dataKey );
+			}
 		}
 	};
 

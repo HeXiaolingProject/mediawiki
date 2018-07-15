@@ -13,7 +13,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 		'ResourceModuleSkinStyles' => 'handleResourceModules',
 		'Hooks' => 'handleHooks',
 		'ExtensionFunctions' => 'handleExtensionFunctions',
-		'ParserTestFiles' => 'removeAbsolutePath',
+		'ParserTestFiles' => 'removeAutodiscoveredParserTestFiles',
 	];
 
 	/**
@@ -63,7 +63,7 @@ class ConvertExtensionToRegistration extends Maintenance {
 	}
 
 	protected function getAllGlobals() {
-		$processor = new ReflectionClass( 'ExtensionProcessor' );
+		$processor = new ReflectionClass( ExtensionProcessor::class );
 		$settings = $processor->getProperty( 'globalSettings' );
 		$settings->setAccessible( true );
 		return array_merge( $settings->getValue(), $this->formerGlobals );
@@ -144,6 +144,11 @@ class ConvertExtensionToRegistration extends Maintenance {
 				unset( $this->json[$key] );
 			}
 		}
+		// Set a requirement on the MediaWiki version that the current MANIFEST_VERSION
+		// was introduced in.
+		$out['requires'] = [
+			ExtensionRegistry::MEDIAWIKI_CORE => ExtensionRegistry::MANIFEST_VERSION_MW_VERSION
+		];
 		$out += $this->json;
 		// Put this at the bottom
 		$out['manifest_version'] = ExtensionRegistry::MANIFEST_VERSION;
@@ -215,6 +220,22 @@ class ConvertExtensionToRegistration extends Maintenance {
 			$out[$key] = $this->stripPath( $val, $this->dir );
 		}
 		$this->json[$realName] = $out;
+	}
+
+	protected function removeAutodiscoveredParserTestFiles( $realName, $value ) {
+		$out = [];
+		foreach ( $value as $key => $val ) {
+			$path = $this->stripPath( $val, $this->dir );
+			// When path starts with tests/parser/ the file would be autodiscovered with
+			// extension registry, so no need to add it to extension.json
+			if ( substr( $path, 0, 13 ) !== 'tests/parser/' || substr( $path, -4 ) !== '.txt' ) {
+				$out[$key] = $path;
+			}
+		}
+		// in the best case all entries are filtered out
+		if ( $out ) {
+			$this->json[$realName] = $out;
+		}
 	}
 
 	protected function handleCredits( $realName, $value ) {
@@ -303,5 +324,5 @@ class ConvertExtensionToRegistration extends Maintenance {
 	}
 }
 
-$maintClass = 'ConvertExtensionToRegistration';
+$maintClass = ConvertExtensionToRegistration::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

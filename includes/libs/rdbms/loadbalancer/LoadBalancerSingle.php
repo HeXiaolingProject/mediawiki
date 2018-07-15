@@ -52,9 +52,9 @@ class LoadBalancerSingle extends LoadBalancer {
 					'load' => 1,
 				]
 			],
-			'trxProfiler' => isset( $params['trxProfiler'] ) ? $params['trxProfiler'] : null,
-			'srvCache' => isset( $params['srvCache'] ) ? $params['srvCache'] : null,
-			'wanCache' => isset( $params['wanCache'] ) ? $params['wanCache'] : null
+			'trxProfiler' => $params['trxProfiler'] ?? null,
+			'srvCache' => $params['srvCache'] ?? null,
+			'wanCache' => $params['wanCache'] ?? null
 		] );
 
 		if ( isset( $params['readOnlyReason'] ) ) {
@@ -72,9 +72,12 @@ class LoadBalancerSingle extends LoadBalancer {
 		return new static( [ 'connection' => $db ] + $params );
 	}
 
-	protected function reallyOpenConnection( array $server, $dbNameOverride = false ) {
+	protected function reallyOpenConnection( array $server, DatabaseDomain $domainOverride ) {
 		return $this->db;
 	}
 }
 
-class_alias( 'Wikimedia\Rdbms\LoadBalancerSingle', 'LoadBalancerSingle' );
+/**
+ * @deprecated since 1.29
+ */
+class_alias( LoadBalancerSingle::class, 'LoadBalancerSingle' );

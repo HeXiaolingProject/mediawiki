@@ -21,6 +21,8 @@
  * @ingroup FileAbstraction
  */
 
+use MediaWiki\MediaWikiServices;
+
 /**
  * Foreign file accessible through api.php requests.
  * Very hacky and inefficient, do not use :D
@@ -33,7 +35,7 @@ class ForeignAPIFile extends File {
 	/** @var array */
 	private $mInfo = [];
 
-	protected $repoClass = 'ForeignApiRepo';
+	protected $repoClass = ForeignAPIRepo::class;
 
 	/**
 	 * @param Title|string|bool $title
@@ -126,8 +128,8 @@ class ForeignAPIFile extends File {
 		// Note, the this->canRender() check above implies
 		// that we have a handler, and it can do makeParamString.
 		$otherParams = $this->handler->makeParamString( $params );
-		$width = isset( $params['width'] ) ? $params['width'] : -1;
-		$height = isset( $params['height'] ) ? $params['height'] : -1;
+		$width = $params['width'] ?? -1;
+		$height = $params['height'] ?? -1;
 
 		$thumbUrl = $this->repo->getThumbUrlFromCache(
 			$this->getName(),
@@ -192,8 +194,8 @@ class ForeignAPIFile extends File {
 	}
 
 	/**
-	 * @param array $metadata
-	 * @return array
+	 * @param mixed $metadata
+	 * @return mixed
 	 */
 	public static function parseMetadata( $metadata ) {
 		if ( !is_array( $metadata ) ) {
@@ -254,7 +256,7 @@ class ForeignAPIFile extends File {
 
 	/**
 	 * @param int $audience
-	 * @param User $user
+	 * @param User|null $user
 	 * @return null|string
 	 */
 	public function getDescription( $audience = self::FOR_PUBLIC, User $user = null ) {
@@ -309,9 +311,7 @@ class ForeignAPIFile extends File {
 	 * @return bool|string
 	 */
 	function getDescriptionUrl() {
-		return isset( $this->mInfo['descriptionurl'] )
-			? $this->mInfo['descriptionurl']
-			: false;
+		return $this->mInfo['descriptionurl'] ?? false;
 	}
 
 	/**
@@ -333,15 +333,17 @@ class ForeignAPIFile extends File {
 	}
 
 	/**
-	 * @return array
+	 * @return string[]
 	 */
 	function getThumbnails() {
 		$dir = $this->getThumbPath( $this->getName() );
 		$iter = $this->repo->getBackend()->getFileList( [ 'dir' => $dir ] );
 
 		$files = [];
-		foreach ( $iter as $file ) {
-			$files[] = $file;
+		if ( $iter ) {
+			foreach ( $iter as $file ) {
+				$files[] = $file;
+			}
 		}
 
 		return $files;
@@ -358,7 +360,7 @@ class ForeignAPIFile extends File {
 		$url = $this->repo->getDescriptionRenderUrl( $this->getName(), $wgContLang->getCode() );
 		$key = $this->repo->getLocalCacheKey( 'RemoteFileDescription', 'url', md5( $url ) );
 
-		ObjectCache::getMainWANInstance()->delete( $key );
+		MediaWikiServices::getInstance()->getMainWANObjectCache()->delete( $key );
 	}
 
 	/**
@@ -366,7 +368,7 @@ class ForeignAPIFile extends File {
 	 */
 	function purgeThumbnails( $options = [] ) {
 		$key = $this->repo->getLocalCacheKey( 'ForeignAPIRepo', 'ThumbUrl', $this->getName() );
-		ObjectCache::getMainWANInstance()->delete( $key );
+		MediaWikiServices::getInstance()->getMainWANObjectCache()->delete( $key );
 
 		$files = $this->getThumbnails();
 		// Give media handler a chance to filter the purge list

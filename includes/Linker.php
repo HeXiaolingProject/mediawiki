@@ -39,29 +39,6 @@ class Linker {
 	const TOOL_LINKS_EMAIL = 2;
 
 	/**
-	 * Return the CSS colour of a known link
-	 *
-	 * @deprecated since 1.28, use LinkRenderer::getLinkClasses() instead
-	 *
-	 * @since 1.16.3
-	 * @param LinkTarget $t
-	 * @param int $threshold User defined threshold
-	 * @return string CSS class
-	 */
-	public static function getLinkColour( LinkTarget $t, $threshold ) {
-		wfDeprecated( __METHOD__, '1.28' );
-		$services = MediaWikiServices::getInstance();
-		$linkRenderer = $services->getLinkRenderer();
-		if ( $threshold !== $linkRenderer->getStubThreshold() ) {
-			// Need to create a new instance with the right stub threshold...
-			$linkRenderer = $services->getLinkRendererFactory()->create();
-			$linkRenderer->setStubThreshold( $threshold );
-		}
-
-		return $linkRenderer->getLinkClasses( $t );
-	}
-
-	/**
 	 * This function returns an HTML link to the given target.  It serves a few
 	 * purposes:
 	 *   1) If $target is a Title, the correct URL to link to will be figured
@@ -328,7 +305,9 @@ class Linker {
 		$res = null;
 		$dummy = new DummyLinker;
 		if ( !Hooks::run( 'ImageBeforeProduceHTML', [ &$dummy, &$title,
-			&$file, &$frameParams, &$handlerParams, &$time, &$res ] ) ) {
+			&$file, &$frameParams, &$handlerParams, &$time, &$res,
+			$parser, &$query, &$widthOption
+		] ) ) {
 			return $res;
 		}
 
@@ -338,7 +317,7 @@ class Linker {
 		}
 
 		// Clean up parameters
-		$page = isset( $handlerParams['page'] ) ? $handlerParams['page'] : false;
+		$page = $handlerParams['page'] ?? false;
 		if ( !isset( $frameParams['align'] ) ) {
 			$frameParams['align'] = '';
 		}
@@ -442,7 +421,7 @@ class Linker {
 			$params = [
 				'alt' => $frameParams['alt'],
 				'title' => $frameParams['title'],
-				'valign' => isset( $frameParams['valign'] ) ? $frameParams['valign'] : false,
+				'valign' => $frameParams['valign'] ?? false,
 				'img-class' => $frameParams['class'] ];
 			if ( isset( $frameParams['border'] ) ) {
 				$params['img-class'] .= ( $params['img-class'] !== '' ? ' ' : '' ) . 'thumbborder';
@@ -504,7 +483,7 @@ class Linker {
 	 * @param string $manualthumb
 	 * @return string
 	 */
-	public static function makeThumbLinkObj( Title $title, $file, $label = '', $alt,
+	public static function makeThumbLinkObj( Title $title, $file, $label = '', $alt = '',
 		$align = 'right', $params = [], $framed = false, $manualthumb = ""
 	) {
 		$frameParams = [
@@ -535,7 +514,7 @@ class Linker {
 	) {
 		$exists = $file && $file->exists();
 
-		$page = isset( $handlerParams['page'] ) ? $handlerParams['page'] : false;
+		$page = $handlerParams['page'] ?? false;
 		if ( !isset( $frameParams['align'] ) ) {
 			$frameParams['align'] = 'right';
 		}
@@ -826,7 +805,7 @@ class Linker {
 			$key = strtolower( $name );
 		}
 
-		return self::linkKnown( SpecialPage::getTitleFor( $name ), wfMessage( $key )->text() );
+		return self::linkKnown( SpecialPage::getTitleFor( $name ), wfMessage( $key )->escaped() );
 	}
 
 	/**
@@ -894,24 +873,12 @@ class Linker {
 		$classes = 'mw-userlink';
 		$page = null;
 		if ( $userId == 0 ) {
-			$pos = strpos( $userName, '>' );
-			if ( $pos !== false ) {
-				$iw = explode( ':', substr( $userName, 0, $pos ) );
-				$firstIw = array_shift( $iw );
-				$interwikiLookup = MediaWikiServices::getInstance()->getInterwikiLookup();
-				if ( $interwikiLookup->isValidInterwiki( $firstIw ) ) {
-					$title = MWNamespace::getCanonicalName( NS_USER ) . ':' . substr( $userName, $pos + 1 );
-					if ( $iw ) {
-						$title = join( ':', $iw ) . ':' . $title;
-					}
-					$page = Title::makeTitle( NS_MAIN, $title, '', $firstIw );
-				}
+			$page = ExternalUserNames::getUserLinkTitle( $userName );
+
+			if ( ExternalUserNames::isExternal( $userName ) ) {
 				$classes .= ' mw-extuserlink';
-			} else {
-				$page = SpecialPage::getTitleFor( 'Contributions', $userName );
-				if ( $altUserName === false ) {
-					$altUserName = IP::prettifyIP( $userName );
-				}
+			} elseif ( $altUserName === false ) {
+				$altUserName = IP::prettifyIP( $userName );
 			}
 			$classes .= ' mw-anonuserlink'; // Separate link class for anons (T45179)
 		} else {
@@ -937,7 +904,7 @@ class Linker {
 	 *   red if the user has no edits?
 	 * @param int $flags Customisation flags (e.g. Linker::TOOL_LINKS_NOBLOCK
 	 *   and Linker::TOOL_LINKS_EMAIL).
-	 * @param int $edits User edit count (optional, for performance)
+	 * @param int|null $edits User edit count (optional, for performance)
 	 * @return string HTML fragment
 	 */
 	public static function userToolLinks(
@@ -948,7 +915,7 @@ class Linker {
 		$blockable = !( $flags & self::TOOL_LINKS_NOBLOCK );
 		$addEmailLink = $flags & self::TOOL_LINKS_EMAIL && $userId;
 
-		if ( $userId == 0 && strpos( $userText, '>' ) !== false ) {
+		if ( $userId == 0 && ExternalUserNames::isExternal( $userText ) ) {
 			// No tools for an external user
 			return '';
 		}
@@ -999,7 +966,7 @@ class Linker {
 	 * @since 1.16.3
 	 * @param int $userId User identifier
 	 * @param string $userText User name or IP address
-	 * @param int $edits User edit count (optional, for performance)
+	 * @param int|null $edits User edit count (optional, for performance)
 	 * @return string
 	 */
 	public static function userToolLinksRedContribs( $userId, $userText, $edits = null ) {
@@ -1233,9 +1200,9 @@ class Linker {
 	 * @todo FIXME: Doesn't handle sub-links as in image thumb texts like the main parser
 	 *
 	 * @param string $comment Text to format links in. WARNING! Since the output of this
-	 *	function is html, $comment must be sanitized for use as html. You probably want
-	 *	to pass $comment through Sanitizer::escapeHtmlAllowEntities() before calling
-	 *	this function.
+	 * 	function is html, $comment must be sanitized for use as html. You probably want
+	 * 	to pass $comment through Sanitizer::escapeHtmlAllowEntities() before calling
+	 * 	this function.
 	 * @param Title|null $title An optional title object used to links to sections
 	 * @param bool $local Whether section links should refer to local page
 	 * @param string|null $wikiId Id of the wiki to link to (if not the local wiki),
@@ -1529,7 +1496,7 @@ class Linker {
 	 * @return string
 	 */
 	public static function tocIndent() {
-		return "\n<ul>";
+		return "\n<ul>\n";
 	}
 
 	/**
@@ -1560,9 +1527,9 @@ class Linker {
 			$classes .= " tocsection-$sectionIndex";
 		}
 
-		// \n<li class="$classes"><a href="#$anchor"><span class="tocnumber">
+		// <li class="$classes"><a href="#$anchor"><span class="tocnumber">
 		// $tocnumber</span> <span class="toctext">$tocline</span></a>
-		return "\n" . Html::openElement( 'li', [ 'class' => $classes ] )
+		return Html::openElement( 'li', [ 'class' => $classes ] )
 			. Html::rawElement( 'a',
 				[ 'href' => "#$anchor" ],
 				Html::element( 'span', [ 'class' => 'tocnumber' ], $tocnumber )
@@ -1595,12 +1562,24 @@ class Linker {
 		$title = wfMessage( 'toc' )->inLanguage( $lang )->escaped();
 
 		return '<div id="toc" class="toc">'
+			. Html::element( 'input', [
+				'type' => 'checkbox',
+				'id' => 'toctogglecheckbox',
+				'class' => 'toctogglecheckbox',
+				'style' => 'display:none',
+			] )
 			. Html::openElement( 'div', [
 				'class' => 'toctitle',
 				'lang' => $lang->getHtmlCode(),
 				'dir' => $lang->getDir(),
 			] )
-			. '<h2>' . $title . "</h2></div>\n"
+			. "<h2>$title</h2>"
+			. '<span class="toctogglespan">'
+			. Html::label( '', 'toctogglecheckbox', [
+				'class' => 'toctogglelabel',
+			] )
+			. '</span>'
+			. "</div>\n"
 			. $toc
 			. "</ul>\n</div>\n";
 	}
@@ -1711,7 +1690,7 @@ class Linker {
 	 * @since 1.16.3. $context added in 1.20. $options added in 1.21
 	 *
 	 * @param Revision $rev
-	 * @param IContextSource $context Context to use or null for the main context.
+	 * @param IContextSource|null $context Context to use or null for the main context.
 	 * @param array $options
 	 * @return string
 	 */
@@ -1764,9 +1743,10 @@ class Linker {
 		$dbr = wfGetDB( DB_REPLICA );
 
 		// Up to the value of $wgShowRollbackEditCount revisions are counted
+		$revQuery = Revision::getQueryInfo();
 		$res = $dbr->select(
-			'revision',
-			[ 'rev_user_text', 'rev_deleted' ],
+			$revQuery['tables'],
+			[ 'rev_user_text' => $revQuery['fields']['rev_user_text'], 'rev_deleted' ],
 			// $rev->getPage() returns null sometimes
 			[ 'rev_page' => $rev->getTitle()->getArticleID() ],
 			__METHOD__,
@@ -1774,7 +1754,8 @@ class Linker {
 				'USE INDEX' => [ 'revision' => 'page_timestamp' ],
 				'ORDER BY' => 'rev_timestamp DESC',
 				'LIMIT' => $wgShowRollbackEditCount + 1
-			]
+			],
+			$revQuery['joins']
 		);
 
 		$editCount = 0;

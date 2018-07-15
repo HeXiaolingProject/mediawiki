@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Oct 3, 2014 as a split from ApiQueryRevisions
- *
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -48,7 +44,7 @@ abstract class ApiQueryRevisionsBase extends ApiQueryGeneratorBase {
 	}
 
 	/**
-	 * @param ApiPageSet $resultPageSet
+	 * @param ApiPageSet|null $resultPageSet
 	 * @return void
 	 */
 	abstract protected function run( ApiPageSet $resultPageSet = null );

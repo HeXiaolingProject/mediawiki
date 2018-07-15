@@ -42,11 +42,15 @@ use MessageLocalizer;
 use MWException;
 use MWNamespace;
 use MWTimestamp;
+use OutputPage;
 use Parser;
 use ParserOptions;
-use PreferencesForm;
+use PreferencesFormLegacy;
+use Psr\Log\LoggerAwareTrait;
+use Psr\Log\NullLogger;
 use Skin;
 use SpecialPage;
+use SpecialPreferences;
 use Status;
 use Title;
 use User;
@@ -57,6 +61,7 @@ use Xml;
  * This is the default implementation of PreferencesFactory.
  */
 class DefaultPreferencesFactory implements PreferencesFactory {
+	use LoggerAwareTrait;
 
 	/** @var Config */
 	protected $config;
@@ -86,6 +91,7 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		$this->contLang = $contLang;
 		$this->authManager = $authManager;
 		$this->linkRenderer = $linkRenderer;
+		$this->logger = new NullLogger();
 	}
 
 	/**
@@ -123,6 +129,13 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	public function getFormDescriptor( User $user, IContextSource $context ) {
 		$preferences = [];
 
+		if ( SpecialPreferences::isOouiEnabled( $context ) ) {
+			OutputPage::setupOOUI(
+				strtolower( $context->getSkin()->getSkinName() ),
+				$context->getLanguage()->getDir()
+			);
+		}
+
 		$canIPUseHTTPS = wfCanIPUseHTTPS( $context->getRequest()->getIP() );
 		$this->profilePreferences( $user, $context, $preferences, $canIPUseHTTPS );
 		$this->skinPreferences( $user, $context, $preferences );
@@ -137,6 +150,7 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		Hooks::run( 'GetPreferences', [ $user, &$preferences ] );
 
 		$this->loadPreferenceValues( $user, $context, $preferences );
+		$this->logger->debug( "Created form descriptor for user '{$user->getName()}'" );
 		return $preferences;
 	}
 
@@ -171,9 +185,7 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 				$info['disabled'] = 'disabled';
 			}
 			$field = HTMLForm::loadInputFromParameters( $name, $info, $dummyForm ); // For validation
-			$globalDefault = isset( $defaultOptions[$name] )
-				? $defaultOptions[$name]
-				: null;
+			$globalDefault = $defaultOptions[$name] ?? null;
 
 			// If it validates, set it as the default
 			if ( isset( $info['default'] ) ) {
@@ -205,9 +217,9 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 
 		// Handling for multiselect preferences
 		if ( ( isset( $info['type'] ) && $info['type'] == 'multiselect' ) ||
-				( isset( $info['class'] ) && $info['class'] == 'HTMLMultiSelectField' ) ) {
+				( isset( $info['class'] ) && $info['class'] == \HTMLMultiSelectField::class ) ) {
 			$options = HTMLFormField::flattenOptions( $info['options'] );
-			$prefix = isset( $info['prefix'] ) ? $info['prefix'] : $name;
+			$prefix = $info['prefix'] ?? $name;
 			$val = [];
 
 			foreach ( $options as $value ) {
@@ -219,10 +231,10 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 
 		// Handling for checkmatrix preferences
 		if ( ( isset( $info['type'] ) && $info['type'] == 'checkmatrix' ) ||
-				( isset( $info['class'] ) && $info['class'] == 'HTMLCheckMatrix' ) ) {
+				( isset( $info['class'] ) && $info['class'] == \HTMLCheckMatrix::class ) ) {
 			$columns = HTMLFormField::flattenOptions( $info['columns'] );
 			$rows = HTMLFormField::flattenOptions( $info['rows'] );
-			$prefix = isset( $info['prefix'] ) ? $info['prefix'] : $name;
+			$prefix = $info['prefix'] ?? $name;
 			$val = [];
 
 			foreach ( $columns as $column ) {
@@ -249,6 +261,8 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	protected function profilePreferences(
 		User $user, IContextSource $context, &$defaultPreferences, $canIPUseHTTPS
 	) {
+		$oouiEnabled = SpecialPreferences::isOouiEnabled( $context );
+
 		// retrieving user name for GENDER and misc.
 		$userName = $user->getName();
 
@@ -360,13 +374,23 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		if ( $canEditPrivateInfo && $this->authManager->allowsAuthenticationDataChange(
 			new PasswordAuthenticationRequest(), false )->isGood()
 		) {
-			$link = $this->linkRenderer->makeLink( SpecialPage::getTitleFor( 'ChangePassword' ),
-				$context->msg( 'prefs-resetpass' )->text(), [],
-				[ 'returnto' => SpecialPage::getTitleFor( 'Preferences' )->getPrefixedText() ] );
+			if ( $oouiEnabled ) {
+				$link = new \OOUI\ButtonWidget( [
+					'href' => SpecialPage::getTitleFor( 'ChangePassword' )->getLinkURL( [
+						'returnto' => SpecialPage::getTitleFor( 'Preferences' )->getPrefixedText()
+					] ),
+					'label' => $context->msg( 'prefs-resetpass' )->text(),
+				] );
+			} else {
+				$link = $this->linkRenderer->makeLink( SpecialPage::getTitleFor( 'ChangePassword' ),
+					$context->msg( 'prefs-resetpass' )->text(), [],
+					[ 'returnto' => SpecialPage::getTitleFor( 'Preferences' )->getPrefixedText() ] );
+			}
+
 			$defaultPreferences['password'] = [
 				'type' => 'info',
 				'raw' => true,
-				'default' => $link,
+				'default' => (string)$link,
 				'label-message' => 'yourpassword',
 				'section' => 'personal/info',
 			];
@@ -382,12 +406,13 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		}
 
 		// Language
-		$languages = Language::fetchLanguageNames( null, 'mw' );
+		$languages = Language::fetchLanguageNames( null, 'mwfile' );
 		$languageCode = $this->config->get( 'LanguageCode' );
 		if ( !array_key_exists( $languageCode, $languages ) ) {
 			$languages[$languageCode] = $languageCode;
+			// Sort the array again
+			ksort( $languages );
 		}
-		ksort( $languages );
 
 		$options = [];
 		foreach ( $languages as $code => $name ) {
@@ -419,12 +444,11 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		if ( !$this->config->get( 'DisableLangConversion' ) ) {
 			foreach ( LanguageConverter::$languagesWithVariants as $langCode ) {
 				if ( $langCode == $this->contLang->getCode() ) {
-					$variants = $this->contLang->getVariants();
-
-					if ( count( $variants ) <= 1 ) {
+					if ( !$this->contLang->hasVariants() ) {
 						continue;
 					}
 
+					$variants = $this->contLang->getVariants();
 					$variantArray = [];
 					foreach ( $variants as $v ) {
 						$v = str_replace( '_', '-', strtolower( $v ) );
@@ -514,16 +538,28 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 
 				$emailAddress = $user->getEmail() ? htmlspecialchars( $user->getEmail() ) : '';
 				if ( $canEditPrivateInfo && $this->authManager->allowsPropertyChange( 'emailaddress' ) ) {
-					$link = $this->linkRenderer->makeLink(
-						SpecialPage::getTitleFor( 'ChangeEmail' ),
-						$context->msg( $user->getEmail() ? 'prefs-changeemail' : 'prefs-setemail' )->text(),
-						[],
-						[ 'returnto' => SpecialPage::getTitleFor( 'Preferences' )->getPrefixedText() ] );
+					if ( $oouiEnabled ) {
+						$link = new \OOUI\ButtonWidget( [
+							'href' => SpecialPage::getTitleFor( 'ChangeEmail' )->getLinkURL( [
+								'returnto' => SpecialPage::getTitleFor( 'Preferences' )->getPrefixedText()
+							] ),
+							'label' =>
+								$context->msg( $user->getEmail() ? 'prefs-changeemail' : 'prefs-setemail' )->text(),
+						] );
 
-					$emailAddress .= $emailAddress == '' ? $link : (
-						$context->msg( 'word-separator' )->escaped()
-						. $context->msg( 'parentheses' )->rawParams( $link )->escaped()
-					);
+						$emailAddress .= $emailAddress == '' ? $link : ( '<br />' . $link );
+					} else {
+						$link = $this->linkRenderer->makeLink(
+							SpecialPage::getTitleFor( 'ChangeEmail' ),
+							$context->msg( $user->getEmail() ? 'prefs-changeemail' : 'prefs-setemail' )->text(),
+							[],
+							[ 'returnto' => SpecialPage::getTitleFor( 'Preferences' )->getPrefixedText() ] );
+
+						$emailAddress .= $emailAddress == '' ? $link : (
+							$context->msg( 'word-separator' )->escaped()
+							. $context->msg( 'parentheses' )->rawParams( $link )->escaped()
+						);
+					}
 				}
 
 				$defaultPreferences['emailaddress'] = [
@@ -557,11 +593,19 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 						$emailauthenticationclass = 'mw-email-authenticated';
 					} else {
 						$disableEmailPrefs = true;
-						$emailauthenticated = $context->msg( 'emailnotauthenticated' )->parse() . '<br />' .
-							$this->linkRenderer->makeKnownLink(
-								SpecialPage::getTitleFor( 'Confirmemail' ),
-								$context->msg( 'emailconfirmlink' )->text()
-							) . '<br />';
+						if ( $oouiEnabled ) {
+							$emailauthenticated = $context->msg( 'emailnotauthenticated' )->parse() . '<br />' .
+								new \OOUI\ButtonWidget( [
+									'href' => SpecialPage::getTitleFor( 'Confirmemail' )->getLinkURL(),
+									'label' => $context->msg( 'emailconfirmlink' )->text(),
+								] );
+						} else {
+							$emailauthenticated = $context->msg( 'emailnotauthenticated' )->parse() . '<br />' .
+								$this->linkRenderer->makeKnownLink(
+									SpecialPage::getTitleFor( 'Confirmemail' ),
+									$context->msg( 'emailconfirmlink' )->text()
+								) . '<br />';
+						}
 						$emailauthenticationclass = "mw-email-not-authenticated";
 					}
 				} else {
@@ -705,7 +749,7 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 				'type' => 'info',
 				'raw' => true,
 				'default' => $context->getLanguage()->pipeList( $linkTools ),
-				'label-message' => 'prefs-common-css-js',
+				'label-message' => 'prefs-common-config',
 				'section' => 'rendering/skin',
 			];
 		}
@@ -799,12 +843,13 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		}
 
 		$defaultPreferences['timecorrection'] = [
-			'class' => 'HTMLSelectOrOtherField',
+			'class' => \HTMLSelectOrOtherField::class,
 			'label-message' => 'timezonelegend',
 			'options' => $tzOptions,
 			'default' => $tzSetting,
 			'size' => 20,
 			'section' => 'rendering/timeoffset',
+			'id' => 'wpTimeCorrection',
 		];
 	}
 
@@ -976,6 +1021,12 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 			'label-message' => 'tog-hideminor',
 			'section' => 'rc/advancedrc',
 		];
+		$defaultPreferences['rcfilters-rc-collapsed'] = [
+			'type' => 'api',
+		];
+		$defaultPreferences['rcfilters-wl-collapsed'] = [
+			'type' => 'api',
+		];
 		$defaultPreferences['rcfilters-saved-queries'] = [
 			'type' => 'api',
 		];
@@ -1028,7 +1079,7 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		if ( $this->config->get( 'StructuredChangeFiltersShowPreference' ) ) {
 			$defaultPreferences['rcenhancedfilters-disable'] = [
 				'type' => 'toggle',
-				'section' => 'rc/opt-out',
+				'section' => 'rc/optoutrc',
 				'label-message' => 'rcfilters-preference-label',
 				'help-message' => 'rcfilters-preference-help',
 			];
@@ -1043,28 +1094,44 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	protected function watchlistPreferences(
 		User $user, IContextSource $context, &$defaultPreferences
 	) {
+		$oouiEnabled = SpecialPreferences::isOouiEnabled( $context );
+
 		$watchlistdaysMax = ceil( $this->config->get( 'RCMaxAge' ) / ( 3600 * 24 ) );
 
 		# # Watchlist #####################################
 		if ( $user->isAllowed( 'editmywatchlist' ) ) {
-			$editWatchlistLinks = [];
+			$editWatchlistLinks = '';
+			$editWatchlistLinksOld = [];
 			$editWatchlistModes = [
-				'edit' => [ 'EditWatchlist', false ],
-				'raw' => [ 'EditWatchlist', 'raw' ],
-				'clear' => [ 'EditWatchlist', 'clear' ],
+				'edit' => [ 'subpage' => false, 'flags' => [] ],
+				'raw' => [ 'subpage' => 'raw', 'flags' => [] ],
+				'clear' => [ 'subpage' => 'clear', 'flags' => [ 'destructive' ] ],
 			];
-			foreach ( $editWatchlistModes as $editWatchlistMode => $mode ) {
+			foreach ( $editWatchlistModes as $mode => $options ) {
 				// Messages: prefs-editwatchlist-edit, prefs-editwatchlist-raw, prefs-editwatchlist-clear
-				$editWatchlistLinks[] = $this->linkRenderer->makeKnownLink(
-					SpecialPage::getTitleFor( $mode[0], $mode[1] ),
-					new HtmlArmor( $context->msg( "prefs-editwatchlist-{$editWatchlistMode}" )->parse() )
-				);
+				if ( $oouiEnabled ) {
+					$editWatchlistLinks .=
+						new \OOUI\ButtonWidget( [
+							'href' => SpecialPage::getTitleFor( 'EditWatchlist', $options['subpage'] )->getLinkURL(),
+							'flags' => $options[ 'flags' ],
+							'label' => new \OOUI\HtmlSnippet(
+								$context->msg( "prefs-editwatchlist-{$mode}" )->parse()
+							),
+						] );
+				} else {
+					$editWatchlistLinksOld[] = $this->linkRenderer->makeKnownLink(
+						SpecialPage::getTitleFor( 'EditWatchlist', $options['subpage'] ),
+						new HtmlArmor( $context->msg( "prefs-editwatchlist-{$mode}" )->parse() )
+					);
+				}
 			}
 
 			$defaultPreferences['editwatchlist'] = [
 				'type' => 'info',
 				'raw' => true,
-				'default' => $context->getLanguage()->pipeList( $editWatchlistLinks ),
+				'default' => $oouiEnabled ?
+					$editWatchlistLinks :
+					$context->getLanguage()->pipeList( $editWatchlistLinksOld ),
 				'label-message' => 'prefs-editwatchlist-label',
 				'section' => 'watchlist/editwatchlist',
 			];
@@ -1117,11 +1184,18 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 			'section' => 'watchlist/advancedwatchlist',
 			'label-message' => 'tog-watchlisthideliu',
 		];
-		$defaultPreferences['watchlistreloadautomatically'] = [
-			'type' => 'toggle',
-			'section' => 'watchlist/advancedwatchlist',
-			'label-message' => 'tog-watchlistreloadautomatically',
-		];
+
+		if ( !\SpecialWatchlist::checkStructuredFilterUiEnabled(
+			$this->config,
+			$user
+		) ) {
+			$defaultPreferences['watchlistreloadautomatically'] = [
+				'type' => 'toggle',
+				'section' => 'watchlist/advancedwatchlist',
+				'label-message' => 'tog-watchlistreloadautomatically',
+			];
+		}
+
 		$defaultPreferences['watchlistunwatchlinks'] = [
 			'type' => 'toggle',
 			'section' => 'watchlist/advancedwatchlist',
@@ -1176,16 +1250,41 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 			}
 		}
 
-		if ( $this->config->get( 'EnableAPI' ) ) {
-			$defaultPreferences['watchlisttoken'] = [
-				'type' => 'api',
+		$defaultPreferences['watchlisttoken'] = [
+			'type' => 'api',
+		];
+
+		if ( $oouiEnabled ) {
+			$tokenButton = new \OOUI\ButtonWidget( [
+				'href' => SpecialPage::getTitleFor( 'ResetTokens' )->getLinkURL( [
+					'returnto' => SpecialPage::getTitleFor( 'Preferences' )->getPrefixedText()
+				] ),
+				'label' => $context->msg( 'prefs-watchlist-managetokens' )->text(),
+			] );
+			$defaultPreferences['watchlisttoken-info'] = [
+				'type' => 'info',
+				'section' => 'watchlist/tokenwatchlist',
+				'label-message' => 'prefs-watchlist-token',
+				'help-message' => 'prefs-help-tokenmanagement',
+				'raw' => true,
+				'default' => (string)$tokenButton,
 			];
+		} else {
 			$defaultPreferences['watchlisttoken-info'] = [
 				'type' => 'info',
 				'section' => 'watchlist/tokenwatchlist',
 				'label-message' => 'prefs-watchlist-token',
 				'default' => $user->getTokenFromOption( 'watchlisttoken' ),
 				'help-message' => 'prefs-help-watchlist-token2',
+			];
+		}
+
+		if ( $this->config->get( 'StructuredChangeFiltersShowWatchlistPreference' ) ) {
+			$defaultPreferences['wlenhancedfilters-disable'] = [
+				'type' => 'toggle',
+				'section' => 'watchlist/optoutwatchlist',
+				'label-message' => 'rcfilters-watchlist-preference-label',
+				'help-message' => 'rcfilters-watchlist-preference-help',
 			];
 		}
 	}
@@ -1324,8 +1423,8 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		$pixels = $l10n->msg( 'unit-pixel' )->text();
 
 		foreach ( $this->config->get( 'ImageLimits' ) as $index => $limits ) {
-			// Note: A left-to-right marker (\u200e) is inserted, see T144386
-			$display = "{$limits[0]}" . json_decode( '"\u200e"' ) . "×{$limits[1]}" . $pixels;
+			// Note: A left-to-right marker (U+200E) is inserted, see T144386
+			$display = "{$limits[0]}\u{200E}×{$limits[1]}$pixels";
 			$ret[$display] = $index;
 		}
 
@@ -1396,14 +1495,19 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	 * @param IContextSource $context
 	 * @param string $formClass
 	 * @param array $remove Array of items to remove
-	 * @return PreferencesForm|HTMLForm
+	 * @return HTMLForm
 	 */
 	public function getForm(
 		User $user,
 		IContextSource $context,
-		$formClass = 'PreferencesForm',
+		$formClass = PreferencesFormLegacy::class,
 		array $remove = []
 	) {
+		if ( SpecialPreferences::isOouiEnabled( $context ) ) {
+			// We use ButtonWidgets in some of the getPreferences() functions
+			$context->getOutput()->enableOOUI();
+		}
+
 		$formDescriptor = $this->getFormDescriptor( $user, $context );
 		if ( count( $remove ) ) {
 			$removeKeys = array_flip( $remove );
@@ -1418,7 +1522,7 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		}
 
 		/**
-		 * @var $htmlForm PreferencesForm
+		 * @var $htmlForm HTMLForm
 		 */
 		$htmlForm = new $formClass( $formDescriptor, $context, 'prefs' );
 
@@ -1429,7 +1533,7 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 		# Used message keys: 'accesskey-preferences-save', 'tooltip-preferences-save'
 		$htmlForm->setSubmitTooltip( 'preferences-save' );
 		$htmlForm->setSubmitID( 'prefcontrol' );
-		$htmlForm->setSubmitCallback( function ( array $formData, PreferencesForm $form ) {
+		$htmlForm->setSubmitCallback( function ( array $formData, HTMLForm $form ) {
 			return $this->submitForm( $formData, $form );
 		} );
 
@@ -1534,10 +1638,10 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	 * Handle the form submission if everything validated properly
 	 *
 	 * @param array $formData
-	 * @param PreferencesForm $form
+	 * @param HTMLForm $form
 	 * @return bool|Status|string
 	 */
-	protected function saveFormData( $formData, PreferencesForm $form ) {
+	protected function saveFormData( $formData, HTMLForm $form ) {
 		$user = $form->getModifiedUser();
 		$hiddenPrefs = $this->config->get( 'HiddenPrefs' );
 		$result = true;
@@ -1614,10 +1718,10 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	 * @deprecated since 1.31, its inception
 	 *
 	 * @param array $formData
-	 * @param PreferencesForm $form
+	 * @param HTMLForm $form
 	 * @return bool|Status|string
 	 */
-	protected function legacySaveFormData( $formData, PreferencesForm $form ) {
+	public function legacySaveFormData( $formData, HTMLForm $form ) {
 		return $this->saveFormData( $formData, $form );
 	}
 
@@ -1625,31 +1729,38 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	 * Save the form data and reload the page
 	 *
 	 * @param array $formData
-	 * @param PreferencesForm $form
+	 * @param HTMLForm $form
 	 * @return Status
 	 */
-	protected function submitForm( array $formData, PreferencesForm $form ) {
+	protected function submitForm( array $formData, HTMLForm $form ) {
 		$res = $this->saveFormData( $formData, $form );
 
-		if ( $res ) {
+		if ( $res === true ) {
+			$context = $form->getContext();
 			$urlOptions = [];
 
 			if ( $res === 'eauth' ) {
 				$urlOptions['eauth'] = 1;
 			}
 
+			if (
+				$context->getRequest()->getFuzzyBool( 'ooui' ) !==
+				$context->getConfig()->get( 'OOUIPreferences' )
+			) {
+				$urlOptions[ 'ooui' ] = $context->getRequest()->getFuzzyBool( 'ooui' ) ? 1 : 0;
+			}
+
 			$urlOptions += $form->getExtraSuccessRedirectParameters();
 
 			$url = $form->getTitle()->getFullURL( $urlOptions );
 
-			$context = $form->getContext();
 			// Set session data for the success message
 			$context->getRequest()->getSession()->set( 'specialPreferencesSaveSuccess', 1 );
 
 			$context->getOutput()->redirect( $url );
 		}
 
-		return Status::newGood();
+		return ( $res === true ? Status::newGood() : $res );
 	}
 
 	/**
@@ -1658,10 +1769,10 @@ class DefaultPreferencesFactory implements PreferencesFactory {
 	 * @deprecated since 1.31, its inception
 	 *
 	 * @param array $formData
-	 * @param PreferencesForm $form
+	 * @param HTMLForm $form
 	 * @return Status
 	 */
-	public function legacySubmitForm( array $formData, PreferencesForm $form ) {
+	public function legacySubmitForm( array $formData, HTMLForm $form ) {
 		return $this->submitForm( $formData, $form );
 	}
 

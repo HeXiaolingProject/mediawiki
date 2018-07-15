@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Sep 7, 2006
- *
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -259,7 +255,7 @@ abstract class ApiQueryBase extends ApiBase {
 	/**
 	 * Equivalent to addWhere(array($field => $value))
 	 * @param string $field Field name
-	 * @param string|string[] $value Value; ignored if null or empty array;
+	 * @param string|string[] $value Value; ignored if null or empty array
 	 */
 	protected function addWhereFld( $field, $value ) {
 		if ( $value !== null && !( is_array( $value ) && !$value ) ) {
@@ -324,7 +320,7 @@ abstract class ApiQueryBase extends ApiBase {
 	 * Add an option such as LIMIT or USE INDEX. If an option was set
 	 * before, the old value will be overwritten
 	 * @param string $name Option name
-	 * @param string|string[] $value Option value
+	 * @param string|string[]|null $value Option value
 	 */
 	protected function addOption( $name, $value = null ) {
 		if ( is_null( $value ) ) {
@@ -406,8 +402,8 @@ abstract class ApiQueryBase extends ApiBase {
 	}
 
 	/**
-	 * @param string $query
-	 * @param string $protocol
+	 * @param string|null $query
+	 * @param string|null $protocol
 	 * @return null|string
 	 */
 	public function prepareUrlQuerySearchString( $query = null, $protocol = null ) {
@@ -450,12 +446,14 @@ abstract class ApiQueryBase extends ApiBase {
 		if ( $showBlockInfo ) {
 			$this->addFields( [
 				'ipb_id',
-				'ipb_by',
-				'ipb_by_text',
 				'ipb_expiry',
 				'ipb_timestamp'
 			] );
-			$commentQuery = CommentStore::newKey( 'ipb_reason' )->getJoin();
+			$actorQuery = ActorMigration::newMigration()->getJoin( 'ipb_by' );
+			$this->addTables( $actorQuery['tables'] );
+			$this->addFields( $actorQuery['fields'] );
+			$this->addJoinConds( $actorQuery['joins'] );
+			$commentQuery = CommentStore::getStore()->getJoin( 'ipb_reason' );
 			$this->addTables( $commentQuery['tables'] );
 			$this->addFields( $commentQuery['fields'] );
 			$this->addJoinConds( $commentQuery['joins'] );
@@ -505,7 +503,7 @@ abstract class ApiQueryBase extends ApiBase {
 	 * Same as addPageSubItems(), but one element of $data at a time
 	 * @param int $pageId Page ID
 	 * @param array $item Data array à la ApiResult
-	 * @param string $elemname XML element name. If null, getModuleName()
+	 * @param string|null $elemname XML element name. If null, getModuleName()
 	 *  is used
 	 * @return bool Whether the element fit in the result
 	 */

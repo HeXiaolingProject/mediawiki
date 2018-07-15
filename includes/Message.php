@@ -242,7 +242,7 @@ class Message implements MessageSpecifier, Serializable {
 	 * message keys to try and use the first non-empty message for, or a
 	 * MessageSpecifier to copy from.
 	 * @param array $params Message parameters.
-	 * @param Language $language [optional] Language to use (defaults to current user language).
+	 * @param Language|null $language [optional] Language to use (defaults to current user language).
 	 * @throws InvalidArgumentException
 	 */
 	public function __construct( $key, $params = [], Language $language = null ) {
@@ -726,6 +726,8 @@ class Message implements MessageSpecifier, Serializable {
 	 * @throws MWException
 	 */
 	public function inLanguage( $lang ) {
+		$previousLanguage = $this->language;
+
 		if ( $lang instanceof Language ) {
 			$this->language = $lang;
 		} elseif ( is_string( $lang ) ) {
@@ -740,7 +742,11 @@ class Message implements MessageSpecifier, Serializable {
 				. "passed a String or Language object; $type given"
 			);
 		}
-		$this->message = null;
+
+		if ( $this->language !== $previousLanguage ) {
+			// The language has changed. Clear the message cache.
+			$this->message = null;
+		}
 		$this->interface = false;
 		return $this;
 	}
@@ -831,6 +837,7 @@ class Message implements MessageSpecifier, Serializable {
 	 *   the last time (this is for B/C and should be avoided).
 	 *
 	 * @return string HTML
+	 * @suppress SecurityCheck-DoubleEscaped phan false positive
 	 */
 	public function toString( $format = null ) {
 		if ( $format === null ) {
@@ -1105,7 +1112,7 @@ class Message implements MessageSpecifier, Serializable {
 	public static function listParam( array $list, $type = 'text' ) {
 		if ( !isset( self::$listTypeMap[$type] ) ) {
 			throw new InvalidArgumentException(
-				"Invalid type '$type'. Known types are: " . join( ', ', array_keys( self::$listTypeMap ) )
+				"Invalid type '$type'. Known types are: " . implode( ', ', array_keys( self::$listTypeMap ) )
 			);
 		}
 		return [ 'list' => $list, 'type' => $type ];
@@ -1122,7 +1129,7 @@ class Message implements MessageSpecifier, Serializable {
 	 *
 	 * @return string
 	 */
-	protected function replaceParameters( $message, $type = 'before', $format ) {
+	protected function replaceParameters( $message, $type, $format ) {
 		// A temporary marker for $1 parameters that is only valid
 		// in non-attribute contexts. However if the entire message is escaped
 		// then we don't want to use it because it will be mangled in all contexts
@@ -1245,7 +1252,14 @@ class Message implements MessageSpecifier, Serializable {
 		);
 
 		return $out instanceof ParserOutput
-			? $out->getText( [ 'enableSectionEditLinks' => false ] )
+			? $out->getText( [
+				'enableSectionEditLinks' => false,
+				// Wrapping messages in an extra <div> is probably not expected. If
+				// they're outside the content area they probably shouldn't be
+				// targeted by CSS that's targeting the parser output, and if
+				// they're inside they already are from the outer div.
+				'unwrap' => true,
+			] )
 			: $out;
 	}
 

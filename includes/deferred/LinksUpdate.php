@@ -177,15 +177,16 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 
 		// Commit and release the lock (if set)
 		ScopedCallback::consume( $scopedLock );
-		// Run post-commit hooks without DBO_TRX
-		$this->getDB()->onTransactionIdle(
+		// Run post-commit hook handlers without DBO_TRX
+		DeferredUpdates::addUpdate( new AutoCommitUpdate(
+			$this->getDB(),
+			__METHOD__,
 			function () {
 				// Avoid PHP 7.1 warning from passing $this by reference
 				$linksUpdate = $this;
 				Hooks::run( 'LinksUpdateComplete', [ &$linksUpdate, $this->ticket ] );
-			},
-			__METHOD__
-		);
+			}
+		) );
 	}
 
 	/**
@@ -568,6 +569,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 					'el_from' => $this->mId,
 					'el_to' => $url,
 					'el_index' => $index,
+					'el_index_60' => substr( $index, 0, 60 ),
 				];
 			}
 		}
@@ -591,13 +593,7 @@ class LinksUpdate extends DataUpdate implements EnqueueableDataUpdate {
 			$nt = Title::makeTitleSafe( NS_CATEGORY, $name );
 			$wgContLang->findVariantLink( $name, $nt, true );
 
-			if ( $this->mTitle->getNamespace() == NS_CATEGORY ) {
-				$type = 'subcat';
-			} elseif ( $this->mTitle->getNamespace() == NS_FILE ) {
-				$type = 'file';
-			} else {
-				$type = 'page';
-			}
+			$type = MWNamespace::getCategoryLinkType( $this->mTitle->getNamespace() );
 
 			# Treat custom sortkeys as a prefix, so that if multiple
 			# things are forced to sort as '*' or something, they'll

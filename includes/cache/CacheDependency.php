@@ -118,7 +118,7 @@ class DependencyWrapper {
 		if ( is_object( $obj ) && $obj instanceof DependencyWrapper && !$obj->isExpired() ) {
 			$value = $obj->value;
 		} elseif ( $callback ) {
-			$value = call_user_func_array( $callback, $callbackParams );
+			$value = $callback( ...$callbackParams );
 			# Cache the newly-generated value
 			$wrapper = new DependencyWrapper( $value, $deps );
 			$wrapper->storeToCache( $cache, $key, $expiry );
@@ -181,11 +181,11 @@ class FileDependency extends CacheDependency {
 
 	function loadDependencyValues() {
 		if ( is_null( $this->timestamp ) ) {
-			MediaWiki\suppressWarnings();
+			Wikimedia\suppressWarnings();
 			# Dependency on a non-existent file stores "false"
 			# This is a valid concept!
 			$this->timestamp = filemtime( $this->filename );
-			MediaWiki\restoreWarnings();
+			Wikimedia\restoreWarnings();
 		}
 	}
 
@@ -193,9 +193,9 @@ class FileDependency extends CacheDependency {
 	 * @return bool
 	 */
 	function isExpired() {
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$lastmod = filemtime( $this->filename );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 		if ( $lastmod === false ) {
 			if ( $this->timestamp === false ) {
 				# Still nonexistent

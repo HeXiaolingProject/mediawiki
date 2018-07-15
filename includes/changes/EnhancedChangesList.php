@@ -93,7 +93,7 @@ class EnhancedChangesList extends ChangesList {
 	 *
 	 * @param RecentChange &$rc
 	 * @param bool $watched
-	 * @param int $linenumber (default null)
+	 * @param int|null $linenumber (default null)
 	 *
 	 * @return string
 	 */
@@ -203,8 +203,7 @@ class EnhancedChangesList extends ChangesList {
 		# Default values for RC flags
 		$collectedRcFlags = [];
 		foreach ( $recentChangesFlags as $key => $value ) {
-			$flagGrouping = ( isset( $recentChangesFlags[$key]['grouping'] ) ?
-					$recentChangesFlags[$key]['grouping'] : 'any' );
+			$flagGrouping = ( $recentChangesFlags[$key]['grouping'] ?? 'any' );
 			switch ( $flagGrouping ) {
 				case 'all':
 					$collectedRcFlags[$key] = true;
@@ -267,6 +266,7 @@ class EnhancedChangesList extends ChangesList {
 
 		# Sub-entries
 		$lines = [];
+		$filterClasses = [];
 		foreach ( $block as $i => $rcObj ) {
 			$line = $this->getLineData( $block, $rcObj, $queryParams );
 			if ( !$line ) {
@@ -277,8 +277,7 @@ class EnhancedChangesList extends ChangesList {
 
 			// Roll up flags
 			foreach ( $line['recentChangesFlagsRaw'] as $key => $value ) {
-				$flagGrouping = ( isset( $recentChangesFlags[$key]['grouping'] ) ?
-					$recentChangesFlags[$key]['grouping'] : 'any' );
+				$flagGrouping = ( $recentChangesFlags[$key]['grouping'] ?? 'any' );
 				switch ( $flagGrouping ) {
 					case 'all':
 						if ( !$value ) {
@@ -295,12 +294,19 @@ class EnhancedChangesList extends ChangesList {
 				}
 			}
 
+			// Roll up filter-based CSS classes
+			$filterClasses = array_merge( $filterClasses, $this->getHTMLClassesForFilters( $rcObj ) );
+			// Add classes for change tags separately, getHTMLClassesForFilters() doesn't add them
+			$this->getTags( $rcObj, $filterClasses );
+			$filterClasses = array_unique( $filterClasses );
+
 			$lines[] = $line;
 		}
 
 		// Further down are some assumptions that $block is a 0-indexed array
 		// with (count-1) as last key. Let's make sure it is.
 		$block = array_values( $block );
+		$filterClasses = array_values( $filterClasses );
 
 		if ( empty( $block ) || !$lines ) {
 			// if we can't show anything, don't display this block altogether
@@ -324,7 +330,7 @@ class EnhancedChangesList extends ChangesList {
 				$first--;
 			}
 			# Get net change
-			$charDifference = $this->formatCharacterDifference( $block[$first], $block[$last] );
+			$charDifference = $this->formatCharacterDifference( $block[$first], $block[$last] ) ?: false;
 		}
 
 		$numberofWatchingusers = $this->numberofWatchingusers( $block[0]->numberofWatchingusers );
@@ -341,6 +347,7 @@ class EnhancedChangesList extends ChangesList {
 			'articleLink' => $articleLink,
 			'charDifference' => $charDifference,
 			'collectedRcFlags' => $this->recentChangesFlags( $collectedRcFlags ),
+			'filterClasses' => $filterClasses,
 			'languageDirMark' => $this->getLanguage()->getDirMark(),
 			'lines' => $lines,
 			'logText' => $logText,
@@ -402,14 +409,14 @@ class EnhancedChangesList extends ChangesList {
 
 		# Log timestamp
 		if ( $type == RC_LOG ) {
-			$link = $rcObj->timestamp;
+			$link = htmlspecialchars( $rcObj->timestamp );
 			# Revision link
 		} elseif ( !ChangesList::userCan( $rcObj, Revision::DELETED_TEXT, $this->getUser() ) ) {
-			$link = '<span class="history-deleted">' . $rcObj->timestamp . '</span> ';
+			$link = Html::element( 'span', [ 'class' => 'history-deleted' ], $rcObj->timestamp );
 		} else {
 			$link = $this->linkRenderer->makeKnownLink(
 				$rcObj->getTitle(),
-				new HtmlArmor( $rcObj->timestamp ),
+				$rcObj->timestamp,
 				[],
 				$params
 			);
@@ -635,7 +642,7 @@ class EnhancedChangesList extends ChangesList {
 		];
 		// timestamp is not really a link here, but is called timestampLink
 		// for consistency with EnhancedChangesListModifyLineData
-		$data['timestampLink'] = $rcObj->timestamp;
+		$data['timestampLink'] = htmlspecialchars( $rcObj->timestamp );
 
 		# Article or log link
 		if ( $logType ) {
@@ -707,9 +714,14 @@ class EnhancedChangesList extends ChangesList {
 		}
 
 		$line = Html::openElement( 'table', $attribs ) . Html::openElement( 'tr' );
+		// Highlight block
+		$line .= Html::rawElement( 'td', [],
+			$this->getHighlightsContainerDiv()
+		);
+
 		$line .= Html::rawElement( 'td', [], '<span class="mw-enhancedchanges-arrow-space"></span>' );
 		$line .= Html::rawElement( 'td', [ 'class' => 'mw-changeslist-line-prefix' ], $prefix );
-		$line .= '<td class="mw-enhanced-rc">';
+		$line .= '<td class="mw-enhanced-rc" colspan="2">';
 
 		if ( isset( $data['recentChangesFlags'] ) ) {
 			$line .= $this->recentChangesFlags( $data['recentChangesFlags'] );
@@ -717,10 +729,10 @@ class EnhancedChangesList extends ChangesList {
 		}
 
 		if ( isset( $data['timestampLink'] ) ) {
-			$line .= '&#160;' . $data['timestampLink'];
+			$line .= "\u{00A0}" . $data['timestampLink'];
 			unset( $data['timestampLink'] );
 		}
-		$line .= '&#160;</td>';
+		$line .= "\u{00A0}</td>";
 		$line .= Html::openElement( 'td', [
 			'class' => 'mw-changeslist-line-inner',
 			// Used for reliable determination of the affiliated page

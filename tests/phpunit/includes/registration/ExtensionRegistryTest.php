@@ -1,9 +1,88 @@
 <?php
 
+/**
+ * @covers ExtensionRegistry
+ */
 class ExtensionRegistryTest extends MediaWikiTestCase {
 
+	private $dataDir;
+
+	public function setUp() {
+		parent::setUp();
+		$this->dataDir = __DIR__ . '/../../data/registration';
+	}
+
+	public function testQueue_invalid() {
+		$registry = new ExtensionRegistry();
+		$path = __DIR__ . '/doesnotexist.json';
+		$this->setExpectedException(
+			Exception::class,
+			"$path does not exist!"
+		);
+		$registry->queue( $path );
+	}
+
+	public function testQueue() {
+		$registry = new ExtensionRegistry();
+		$path = "{$this->dataDir}/good.json";
+		$registry->queue( $path );
+		$this->assertArrayHasKey(
+			$path,
+			$registry->getQueue()
+		);
+		$registry->clearQueue();
+		$this->assertEmpty( $registry->getQueue() );
+	}
+
+	public function testLoadFromQueue_empty() {
+		$registry = new ExtensionRegistry();
+		$registry->loadFromQueue();
+		$this->assertEmpty( $registry->getAllThings() );
+	}
+
+	public function testLoadFromQueue_late() {
+		$registry = new ExtensionRegistry();
+		$registry->finish();
+		$registry->queue( "{$this->dataDir}/good.json" );
+		$this->setExpectedException(
+			MWException::class,
+			"The following paths tried to load late: {$this->dataDir}/good.json"
+		);
+		$registry->loadFromQueue();
+	}
+
+	public function testLoadFromQueue() {
+		$registry = new ExtensionRegistry();
+		$registry->queue( "{$this->dataDir}/good.json" );
+		$registry->loadFromQueue();
+		$this->assertArrayHasKey( 'FooBar', $registry->getAllThings() );
+		$this->assertTrue( $registry->isLoaded( 'FooBar' ) );
+		$this->assertSame( [ 'test' ], $registry->getAttribute( 'FooBarAttr' ) );
+		$this->assertSame( [], $registry->getAttribute( 'NotLoadedAttr' ) );
+	}
+
 	/**
-	 * @covers ExtensionRegistry::exportExtractedData
+	 * @expectedException PHPUnit_Framework_Error
+	 */
+	public function testReadFromQueue_nonexistent() {
+		$registry = new ExtensionRegistry();
+		$registry->readFromQueue( [
+			__DIR__ . '/doesnotexist.json' => 1
+		] );
+	}
+
+	public function testReadFromQueueInitializeAutoloaderWithPsr4Namespaces() {
+		$registry = new ExtensionRegistry();
+		$registry->readFromQueue( [
+			"{$this->dataDir}/autoload_namespaces.json" => 1
+		] );
+		$this->assertTrue(
+			class_exists( 'Test\\MediaWiki\\AutoLoader\\TestFooBar' ),
+			"Registry initializes Autoloader from AutoloadNamespaces"
+		);
+	}
+
+	/**
 	 * @dataProvider provideExportExtractedDataGlobals
 	 */
 	public function testExportExtractedDataGlobals( $desc, $before, $globals, $expected ) {
@@ -28,7 +107,7 @@ class ExtensionRegistryTest extends MediaWikiTestCase {
 			'autoloaderPaths' => []
 		];
 		$registry = new ExtensionRegistry();
-		$class = new ReflectionClass( 'ExtensionRegistry' );
+		$class = new ReflectionClass( ExtensionRegistry::class );
 		$method = $class->getMethod( 'exportExtractedData' );
 		$method->setAccessible( true );
 		$method->invokeArgs( $registry, [ $info ] );
@@ -285,6 +364,18 @@ class ExtensionRegistryTest extends MediaWikiTestCase {
 							],
 						],
 					],
+				],
+			],
+			[
+				'global is null before',
+				[
+					'NullGlobal' => null,
+				],
+				[
+					'NullGlobal' => 'not-null'
+				],
+				[
+					'NullGlobal' => null
 				],
 			],
 		];

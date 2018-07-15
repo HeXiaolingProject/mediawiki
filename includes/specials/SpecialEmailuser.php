@@ -204,7 +204,7 @@ class SpecialEmailUser extends UnlistedSpecialPage {
 		$nu = User::newFromName( $target );
 		$error = self::validateTarget( $nu, $sender );
 
-		return $error ? $error : $nu;
+		return $error ?: $nu;
 	}
 
 	/**
@@ -238,35 +238,12 @@ class SpecialEmailUser extends UnlistedSpecialPage {
 			return 'nowikiemail';
 		}
 
-		if ( $target->getEditCount() === 0 &&
-			( $sender === null || !$sender->isAllowed( 'sendemail-new-users' ) )
-		) {
-			// Determine if target has any other logged actions.
-			$dbr = wfGetDB( DB_REPLICA );
-			$log_id = $dbr->selectField(
-				'logging',
-				'log_id',
-				[
-					'log_user' => $target->getId(),
-					"NOT (log_type = 'newusers' AND log_action = 'autocreate')",
-				],
-				__METHOD__,
-				[ 'LIMIT' => 1 ]
-			);
-
-			if ( !$log_id ) {
-				wfDebug( "User has no logged actions on this wiki.\n" );
-
-				return 'nowikiemail';
-			}
-		}
-
 		if ( $sender !== null && !$target->getOption( 'email-allow-new-users' ) &&
 			$sender->isNewbie()
 		) {
-				wfDebug( "User does not allow user emails from new users.\n" );
+			wfDebug( "User does not allow user emails from new users.\n" );
 
-				return 'nowikiemail';
+			return 'nowikiemail';
 		}
 
 		if ( $sender !== null ) {
@@ -290,7 +267,7 @@ class SpecialEmailUser extends UnlistedSpecialPage {
 	 *
 	 * @param User $user
 	 * @param string $editToken Edit token
-	 * @param Config $config optional for backwards compatibility
+	 * @param Config|null $config optional for backwards compatibility
 	 * @return string|null Null on success or string on error
 	 */
 	public static function getPermissionsError( $user, $editToken, Config $config = null ) {
@@ -355,7 +332,7 @@ class SpecialEmailUser extends UnlistedSpecialPage {
 			Html::label(
 				$this->msg( 'emailusername' )->text(),
 				'emailusertarget'
-			) . '&#160;' .
+			) . "\u{00A0}" .
 			Html::input(
 				'target',
 				$name,

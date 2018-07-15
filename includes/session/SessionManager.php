@@ -32,6 +32,7 @@ use Config;
 use FauxRequest;
 use User;
 use WebRequest;
+use Wikimedia\ObjectFactory;
 
 /**
  * This serves as the entry point to the MediaWiki session handling system.
@@ -429,7 +430,7 @@ final class SessionManager implements SessionManagerInterface {
 		if ( $this->sessionProviders === null ) {
 			$this->sessionProviders = [];
 			foreach ( $this->config->get( 'SessionProviders' ) as $spec ) {
-				$provider = \ObjectFactory::getObjectFromSpec( $spec );
+				$provider = ObjectFactory::getObjectFromSpec( $spec );
 				$provider->setLogger( $this->logger );
 				$provider->setConfig( $this->config );
 				$provider->setManager( $this );
@@ -454,7 +455,7 @@ final class SessionManager implements SessionManagerInterface {
 	 */
 	public function getProvider( $name ) {
 		$providers = $this->getProviders();
-		return isset( $providers[$name] ) ? $providers[$name] : null;
+		return $providers[$name] ?? null;
 	}
 
 	/**

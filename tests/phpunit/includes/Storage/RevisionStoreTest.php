@@ -2,16 +2,21 @@
 
 namespace MediaWiki\Tests\Storage;
 
+use CommentStore;
 use HashBagOStuff;
+use InvalidArgumentException;
 use Language;
+use MediaWiki\MediaWikiServices;
 use MediaWiki\Storage\RevisionAccessException;
 use MediaWiki\Storage\RevisionStore;
 use MediaWiki\Storage\SqlBlobStore;
 use MediaWikiTestCase;
+use MWException;
 use Title;
 use WANObjectCache;
 use Wikimedia\Rdbms\Database;
 use Wikimedia\Rdbms\LoadBalancer;
+use Wikimedia\TestingAccessWrapper;
 
 class RevisionStoreTest extends MediaWikiTestCase {
 
@@ -27,10 +32,19 @@ class RevisionStoreTest extends MediaWikiTestCase {
 		$blobStore = null,
 		$WANObjectCache = null
 	) {
+		global $wgMultiContentRevisionSchemaMigrationStage;
+		// the migration stage should be irrelevant, since all the tests that interact with
+		// the database are in RevisionStoreDbTest, not here.
+
 		return new RevisionStore(
-			$loadBalancer ? $loadBalancer : $this->getMockLoadBalancer(),
-			$blobStore ? $blobStore : $this->getMockSqlBlobStore(),
-			$WANObjectCache ? $WANObjectCache : $this->getHashWANObjectCache()
+			$loadBalancer ?: $this->getMockLoadBalancer(),
+			$blobStore ?: $this->getMockSqlBlobStore(),
+			$WANObjectCache ?: $this->getHashWANObjectCache(),
+			MediaWikiServices::getInstance()->getCommentStore(),
+			MediaWikiServices::getInstance()->getContentModelStore(),
+			MediaWikiServices::getInstance()->getSlotRoleStore(),
+			$wgMultiContentRevisionSchemaMigrationStage,
+			MediaWikiServices::getInstance()->getActorMigration()
 		);
 	}
 
@@ -58,250 +72,57 @@ class RevisionStoreTest extends MediaWikiTestCase {
 			->disableOriginalConstructor()->getMock();
 	}
 
+	/**
+	 * @return \PHPUnit_Framework_MockObject_MockObject|CommentStore
+	 */
+	private function getMockCommentStore() {
+		return $this->getMockBuilder( CommentStore::class )
+			->disableOriginalConstructor()->getMock();
+	}
+
 	private function getHashWANObjectCache() {
 		return new WANObjectCache( [ 'cache' => new \HashBagOStuff() ] );
 	}
 
+	public function provideSetContentHandlerUseDB() {
+		return [
+			// ContentHandlerUseDB can be true of false pre migration.
+			[ false, SCHEMA_COMPAT_OLD, false ],
+			[ true, SCHEMA_COMPAT_OLD, false ],
+			// During and after migration it can not be false...
+			[ false, SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_OLD, true ],
+			[ false, SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_NEW, true ],
+			[ false, SCHEMA_COMPAT_NEW, true ],
+			// ...but it can be true.
+			[ true, SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_OLD, false ],
+			[ true, SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_NEW, false ],
+			[ true, SCHEMA_COMPAT_NEW, false ],
+		];
+	}
+
 	/**
+	 * @dataProvider provideSetContentHandlerUseDB
 	 * @covers \MediaWiki\Storage\RevisionStore::getContentHandlerUseDB
 	 * @covers \MediaWiki\Storage\RevisionStore::setContentHandlerUseDB
 	 */
-	public function testGetSetContentHandlerDb() {
-		$store = $this->getRevisionStore();
-		$this->assertTrue( $store->getContentHandlerUseDB() );
-		$store->setContentHandlerUseDB( false );
-		$this->assertFalse( $store->getContentHandlerUseDB() );
-		$store->setContentHandlerUseDB( true );
-		$this->assertTrue( $store->getContentHandlerUseDB() );
-	}
+	public function testSetContentHandlerUseDB( $contentHandlerDb, $migrationMode, $expectedFail ) {
+		if ( $expectedFail ) {
+			$this->setExpectedException( MWException::class );
+		}
 
-	private function getDefaultQueryFields() {
-		return [
-			'rev_id',
-			'rev_page',
-			'rev_text_id',
-			'rev_timestamp',
-			'rev_user_text',
-			'rev_user',
-			'rev_minor_edit',
-			'rev_deleted',
-			'rev_len',
-			'rev_parent_id',
-			'rev_sha1',
-		];
-	}
-
-	private function getCommentQueryFields() {
-		return [
-			'rev_comment_text' => 'rev_comment',
-			'rev_comment_data' => 'NULL',
-			'rev_comment_cid' => 'NULL',
-		];
-	}
-
-	private function getContentHandlerQueryFields() {
-		return [
-			'rev_content_format',
-			'rev_content_model',
-		];
-	}
-
-	public function provideGetQueryInfo() {
-		yield [
-			true,
-			[],
-			[
-				'tables' => [ 'revision' ],
-				'fields' => array_merge(
-					$this->getDefaultQueryFields(),
-					$this->getCommentQueryFields(),
-					$this->getContentHandlerQueryFields()
-				),
-				'joins' => [],
-			]
-		];
-		yield [
-			false,
-			[],
-			[
-				'tables' => [ 'revision' ],
-				'fields' => array_merge(
-					$this->getDefaultQueryFields(),
-					$this->getCommentQueryFields()
-				),
-				'joins' => [],
-			]
-		];
-		yield [
-			false,
-			[ 'page' ],
-			[
-				'tables' => [ 'revision', 'page' ],
-				'fields' => array_merge(
-					$this->getDefaultQueryFields(),
-					$this->getCommentQueryFields(),
-					[
-						'page_namespace',
-						'page_title',
-						'page_id',
-						'page_latest',
-						'page_is_redirect',
-						'page_len',
-					]
-				),
-				'joins' => [
-					'page' => [ 'INNER JOIN', [ 'page_id = rev_page' ] ],
-				],
-			]
-		];
-		yield [
-			false,
-			[ 'user' ],
-			[
-				'tables' => [ 'revision', 'user' ],
-				'fields' => array_merge(
-					$this->getDefaultQueryFields(),
-					$this->getCommentQueryFields(),
-					[
-						'user_name',
-					]
-				),
-				'joins' => [
-					'user' => [ 'LEFT JOIN', [ 'rev_user != 0', 'user_id = rev_user' ] ],
-				],
-			]
-		];
-		yield [
-			false,
-			[ 'text' ],
-			[
-				'tables' => [ 'revision', 'text' ],
-				'fields' => array_merge(
-					$this->getDefaultQueryFields(),
-					$this->getCommentQueryFields(),
-					[
-						'old_text',
-						'old_flags',
-					]
-				),
-				'joins' => [
-					'text' => [ 'INNER JOIN', [ 'rev_text_id=old_id' ] ],
-				],
-			]
-		];
-		yield [
-			true,
-			[ 'page', 'user', 'text' ],
-			[
-				'tables' => [ 'revision', 'page', 'user', 'text' ],
-				'fields' => array_merge(
-					$this->getDefaultQueryFields(),
-					$this->getCommentQueryFields(),
-					$this->getContentHandlerQueryFields(),
-					[
-						'page_namespace',
-						'page_title',
-						'page_id',
-						'page_latest',
-						'page_is_redirect',
-						'page_len',
-						'user_name',
-						'old_text',
-						'old_flags',
-					]
-				),
-				'joins' => [
-					'page' => [ 'INNER JOIN', [ 'page_id = rev_page' ] ],
-					'user' => [ 'LEFT JOIN', [ 'rev_user != 0', 'user_id = rev_user' ] ],
-					'text' => [ 'INNER JOIN', [ 'rev_text_id=old_id' ] ],
-				],
-			]
-		];
-	}
-
-	/**
-	 * @dataProvider provideGetQueryInfo
-	 * @covers \MediaWiki\Storage\RevisionStore::getQueryInfo
-	 */
-	public function testGetQueryInfo( $contentHandlerUseDb, $options, $expected ) {
-		$store = $this->getRevisionStore();
-		$store->setContentHandlerUseDB( $contentHandlerUseDb );
-		$this->setMwGlobals( 'wgCommentTableSchemaMigrationStage', MIGRATION_OLD );
-		$this->assertEquals( $expected, $store->getQueryInfo( $options ) );
-	}
-
-	private function getDefaultArchiveFields() {
-		return [
-			'ar_id',
-			'ar_page_id',
-			'ar_namespace',
-			'ar_title',
-			'ar_rev_id',
-			'ar_text',
-			'ar_text_id',
-			'ar_timestamp',
-			'ar_user_text',
-			'ar_user',
-			'ar_minor_edit',
-			'ar_deleted',
-			'ar_len',
-			'ar_parent_id',
-			'ar_sha1',
-		];
-	}
-
-	/**
-	 * @covers \MediaWiki\Storage\RevisionStore::getArchiveQueryInfo
-	 */
-	public function testGetArchiveQueryInfo_contentHandlerDb() {
-		$store = $this->getRevisionStore();
-		$store->setContentHandlerUseDB( true );
-		$this->setMwGlobals( 'wgCommentTableSchemaMigrationStage', MIGRATION_OLD );
-		$this->assertEquals(
-			[
-				'tables' => [
-					'archive'
-				],
-				'fields' => array_merge(
-					$this->getDefaultArchiveFields(),
-					[
-						'ar_comment_text' => 'ar_comment',
-						'ar_comment_data' => 'NULL',
-						'ar_comment_cid' => 'NULL',
-						'ar_content_format',
-						'ar_content_model',
-					]
-				),
-				'joins' => [],
-			],
-			$store->getArchiveQueryInfo()
+		$store = new RevisionStore(
+			$this->getMockLoadBalancer(),
+			$this->getMockSqlBlobStore(),
+			$this->getHashWANObjectCache(),
+			$this->getMockCommentStore(),
+			MediaWikiServices::getInstance()->getContentModelStore(),
+			MediaWikiServices::getInstance()->getSlotRoleStore(),
+			$migrationMode,
+			MediaWikiServices::getInstance()->getActorMigration()
 		);
-	}
 
-	/**
-	 * @covers \MediaWiki\Storage\RevisionStore::getArchiveQueryInfo
-	 */
-	public function testGetArchiveQueryInfo_noContentHandlerDb() {
-		$store = $this->getRevisionStore();
-		$store->setContentHandlerUseDB( false );
-		$this->setMwGlobals( 'wgCommentTableSchemaMigrationStage', MIGRATION_OLD );
-		$this->assertEquals(
-			[
-				'tables' => [
-					'archive'
-				],
-				'fields' => array_merge(
-					$this->getDefaultArchiveFields(),
-					[
-						'ar_comment_text' => 'ar_comment',
-						'ar_comment_data' => 'NULL',
-						'ar_comment_cid' => 'NULL',
-					]
-				),
-				'joins' => [],
-			],
-			$store->getArchiveQueryInfo()
-		);
+		$store->setContentHandlerUseDB( $contentHandlerDb );
+		$this->assertSame( $contentHandlerDb, $store->getContentHandlerUseDB() );
 	}
 
 	public function testGetTitle_successFromPageId() {
@@ -333,6 +154,62 @@ class RevisionStoreTest extends MediaWikiTestCase {
 
 		$this->assertSame( 1, $title->getNamespace() );
 		$this->assertSame( 'Food', $title->getDBkey() );
+	}
+
+	public function testGetTitle_successFromPageIdOnFallback() {
+		$mockLoadBalancer = $this->getMockLoadBalancer();
+		// Title calls wfGetDB() so we have to set the main service
+		$this->setService( 'DBLoadBalancer', $mockLoadBalancer );
+
+		$db = $this->getMockDatabase();
+		// Title calls wfGetDB() which uses a regular Connection
+		// Assert that the first call uses a REPLICA and the second falls back to master
+		$mockLoadBalancer->expects( $this->exactly( 2 ) )
+			->method( 'getConnection' )
+			->willReturn( $db );
+		// RevisionStore getTitle uses a ConnectionRef
+		$mockLoadBalancer->expects( $this->atLeastOnce() )
+			->method( 'getConnectionRef' )
+			->willReturn( $db );
+
+		// First call to Title::newFromID, faking no result (db lag?)
+		$db->expects( $this->at( 0 ) )
+			->method( 'selectRow' )
+			->with(
+				'page',
+				$this->anything(),
+				[ 'page_id' => 1 ]
+			)
+			->willReturn( false );
+
+		// First select using rev_id, faking no result (db lag?)
+		$db->expects( $this->at( 1 ) )
+			->method( 'selectRow' )
+			->with(
+				[ 'revision', 'page' ],
+				$this->anything(),
+				[ 'rev_id' => 2 ]
+			)
+			->willReturn( false );
+
+		// Second call to Title::newFromID, no result
+		$db->expects( $this->at( 2 ) )
+			->method( 'selectRow' )
+			->with(
+				'page',
+				$this->anything(),
+				[ 'page_id' => 1 ]
+			)
+			->willReturn( (object)[
+				'page_namespace' => '2',
+				'page_title' => 'Foodey',
+			] );
+
+		$store = $this->getRevisionStore( $mockLoadBalancer );
+		$title = $store->getTitle( 1, 2, RevisionStore::READ_NORMAL );
+
+		$this->assertSame( 2, $title->getNamespace() );
+		$this->assertSame( 'Foodey', $title->getDBkey() );
 	}
 
 	public function testGetTitle_successFromRevId() {
@@ -380,17 +257,15 @@ class RevisionStoreTest extends MediaWikiTestCase {
 		$this->assertSame( 'Food2', $title->getDBkey() );
 	}
 
-	/**
-	 * @covers \MediaWiki\Storage\RevisionStore::getTitle
-	 */
-	public function testGetTitle_throwsExceptionAfterFallbacks() {
+	public function testGetTitle_successFromRevIdOnFallback() {
 		$mockLoadBalancer = $this->getMockLoadBalancer();
 		// Title calls wfGetDB() so we have to set the main service
 		$this->setService( 'DBLoadBalancer', $mockLoadBalancer );
 
 		$db = $this->getMockDatabase();
 		// Title calls wfGetDB() which uses a regular Connection
-		$mockLoadBalancer->expects( $this->atLeastOnce() )
+		// Assert that the first call uses a REPLICA and the second falls back to master
+		$mockLoadBalancer->expects( $this->exactly( 2 ) )
 			->method( 'getConnection' )
 			->willReturn( $db );
 		// RevisionStore getTitle uses a ConnectionRef
@@ -417,6 +292,88 @@ class RevisionStoreTest extends MediaWikiTestCase {
 				[ 'rev_id' => 2 ]
 			)
 			->willReturn( false );
+
+		// Second call to Title::newFromID, no result
+		$db->expects( $this->at( 2 ) )
+			->method( 'selectRow' )
+			->with(
+				'page',
+				$this->anything(),
+				[ 'page_id' => 1 ]
+			)
+			->willReturn( false );
+
+		// Second select using rev_id, result
+		$db->expects( $this->at( 3 ) )
+			->method( 'selectRow' )
+			->with(
+				[ 'revision', 'page' ],
+				$this->anything(),
+				[ 'rev_id' => 2 ]
+			)
+			->willReturn( (object)[
+				'page_namespace' => '2',
+				'page_title' => 'Foodey',
+			] );
+
+		$store = $this->getRevisionStore( $mockLoadBalancer );
+		$title = $store->getTitle( 1, 2, RevisionStore::READ_NORMAL );
+
+		$this->assertSame( 2, $title->getNamespace() );
+		$this->assertSame( 'Foodey', $title->getDBkey() );
+	}
+
+	/**
+	 * @covers \MediaWiki\Storage\RevisionStore::getTitle
+	 */
+	public function testGetTitle_correctFallbackAndthrowsExceptionAfterFallbacks() {
+		$mockLoadBalancer = $this->getMockLoadBalancer();
+		// Title calls wfGetDB() so we have to set the main service
+		$this->setService( 'DBLoadBalancer', $mockLoadBalancer );
+
+		$db = $this->getMockDatabase();
+		// Title calls wfGetDB() which uses a regular Connection
+		// Assert that the first call uses a REPLICA and the second falls back to master
+
+		// RevisionStore getTitle uses getConnectionRef
+		// Title::newFromID uses getConnection
+		foreach ( [ 'getConnection', 'getConnectionRef' ] as $method ) {
+			$mockLoadBalancer->expects( $this->exactly( 2 ) )
+				->method( $method )
+				->willReturnCallback( function ( $masterOrReplica ) use ( $db ) {
+					static $callCounter = 0;
+					$callCounter++;
+					// The first call should be to a REPLICA, and the second a MASTER.
+					if ( $callCounter === 1 ) {
+						$this->assertSame( DB_REPLICA, $masterOrReplica );
+					} elseif ( $callCounter === 2 ) {
+						$this->assertSame( DB_MASTER, $masterOrReplica );
+					}
+					return $db;
+				} );
+		}
+		// First and third call to Title::newFromID, faking no result
+		foreach ( [ 0, 2 ] as $counter ) {
+			$db->expects( $this->at( $counter ) )
+				->method( 'selectRow' )
+				->with(
+					'page',
+					$this->anything(),
+					[ 'page_id' => 1 ]
+				)
+				->willReturn( false );
+		}
+
+		foreach ( [ 1, 3 ] as $counter ) {
+			$db->expects( $this->at( $counter ) )
+				->method( 'selectRow' )
+				->with(
+					[ 'revision', 'page' ],
+					$this->anything(),
+					[ 'rev_id' => 2 ]
+				)
+				->willReturn( false );
+		}
 
 		$store = $this->getRevisionStore( $mockLoadBalancer );
 
@@ -450,15 +407,15 @@ class RevisionStoreTest extends MediaWikiTestCase {
 	 * @dataProvider provideNewRevisionFromRow_legacyEncoding_applied
 	 *
 	 * @covers \MediaWiki\Storage\RevisionStore::newRevisionFromRow
-	 * @covers \MediaWiki\Storage\RevisionStore::newRevisionFromRow_1_29
 	 */
 	public function testNewRevisionFromRow_legacyEncoding_applied( $encoding, $locale, $row, $text ) {
 		$cache = new WANObjectCache( [ 'cache' => new HashBagOStuff() ] );
+		$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
 
-		$blobStore = new SqlBlobStore( wfGetLB(), $cache );
+		$blobStore = new SqlBlobStore( $lb, $cache );
 		$blobStore->setLegacyEncoding( $encoding, Language::factory( $locale ) );
 
-		$store = new RevisionStore( wfGetLB(), $blobStore, $cache );
+		$store = $this->getRevisionStore( $lb, $blobStore, $cache );
 
 		$record = $store->newRevisionFromRow(
 			$this->makeRow( $row ),
@@ -471,7 +428,6 @@ class RevisionStoreTest extends MediaWikiTestCase {
 
 	/**
 	 * @covers \MediaWiki\Storage\RevisionStore::newRevisionFromRow
-	 * @covers \MediaWiki\Storage\RevisionStore::newRevisionFromRow_1_29
 	 */
 	public function testNewRevisionFromRow_legacyEncoding_ignored() {
 		$row = [
@@ -480,11 +436,12 @@ class RevisionStoreTest extends MediaWikiTestCase {
 		];
 
 		$cache = new WANObjectCache( [ 'cache' => new HashBagOStuff() ] );
+		$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
 
-		$blobStore = new SqlBlobStore( wfGetLB(), $cache );
+		$blobStore = new SqlBlobStore( $lb, $cache );
 		$blobStore->setLegacyEncoding( 'windows-1252', Language::factory( 'en' ) );
 
-		$store = new RevisionStore( wfGetLB(), $blobStore, $cache );
+		$store = $this->getRevisionStore( $lb, $blobStore, $cache );
 
 		$record = $store->newRevisionFromRow(
 			$this->makeRow( $row ),
@@ -525,6 +482,54 @@ class RevisionStoreTest extends MediaWikiTestCase {
 			];
 
 		return (object)$row;
+	}
+
+	public function provideMigrationConstruction() {
+		return [
+			[ SCHEMA_COMPAT_OLD, false ],
+			[ SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_OLD, false ],
+			[ SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_NEW, false ],
+			[ SCHEMA_COMPAT_NEW, false ],
+			[ SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_BOTH, true ],
+			[ SCHEMA_COMPAT_WRITE_OLD | SCHEMA_COMPAT_READ_BOTH, true ],
+			[ SCHEMA_COMPAT_WRITE_NEW | SCHEMA_COMPAT_READ_BOTH, true ],
+		];
+	}
+
+	/**
+	 * @covers \MediaWiki\Storage\RevisionStore::__construct
+	 * @dataProvider provideMigrationConstruction
+	 */
+	public function testMigrationConstruction( $migration, $expectException ) {
+		if ( $expectException ) {
+			$this->setExpectedException( InvalidArgumentException::class );
+		}
+		$loadBalancer = $this->getMockLoadBalancer();
+		$blobStore = $this->getMockSqlBlobStore();
+		$cache = $this->getHashWANObjectCache();
+		$commentStore = $this->getMockCommentStore();
+		$contentModelStore = MediaWikiServices::getInstance()->getContentModelStore();
+		$slotRoleStore = MediaWikiServices::getInstance()->getSlotRoleStore();
+		$store = new RevisionStore(
+			$loadBalancer,
+			$blobStore,
+			$cache,
+			$commentStore,
+			MediaWikiServices::getInstance()->getContentModelStore(),
+			MediaWikiServices::getInstance()->getSlotRoleStore(),
+			$migration,
+			MediaWikiServices::getInstance()->getActorMigration()
+		);
+		if ( !$expectException ) {
+			$store = TestingAccessWrapper::newFromObject( $store );
+			$this->assertSame( $loadBalancer, $store->loadBalancer );
+			$this->assertSame( $blobStore, $store->blobStore );
+			$this->assertSame( $cache, $store->cache );
+			$this->assertSame( $commentStore, $store->commentStore );
+			$this->assertSame( $contentModelStore, $store->contentModelStore );
+			$this->assertSame( $slotRoleStore, $store->slotRoleStore );
+			$this->assertSame( $migration, $store->mcrMigrationStage );
+		}
 	}
 
 }

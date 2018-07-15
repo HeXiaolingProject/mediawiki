@@ -68,11 +68,11 @@ class MemcLockManager extends QuorumLockManager {
 		$this->srvsByBucket = array_filter( $config['srvsByBucket'], 'is_array' );
 		$this->srvsByBucket = array_values( $this->srvsByBucket ); // consecutive
 
-		$memcConfig = isset( $config['memcConfig'] ) ? $config['memcConfig'] : [];
-		$memcConfig += [ 'class' => 'MemcachedPhpBagOStuff' ]; // default
+		$memcConfig = $config['memcConfig'] ?? [];
+		$memcConfig += [ 'class' => MemcachedPhpBagOStuff::class ]; // default
 
 		$class = $memcConfig['class'];
-		if ( !is_subclass_of( $class, 'MemcachedBagOStuff' ) ) {
+		if ( !is_subclass_of( $class, MemcachedBagOStuff::class ) ) {
 			throw new InvalidArgumentException( "$class is not of type MemcachedBagOStuff." );
 		}
 
@@ -89,7 +89,7 @@ class MemcLockManager extends QuorumLockManager {
 
 		$memc = $this->getCache( $lockSrv );
 		// List of affected paths
-		$paths = call_user_func_array( 'array_merge', array_values( $pathsByType ) );
+		$paths = array_merge( ...array_values( $pathsByType ) );
 		$paths = array_unique( $paths );
 		// List of affected lock record keys
 		$keys = array_map( [ $this, 'recordKeyForPath' ], $paths );
@@ -164,7 +164,7 @@ class MemcLockManager extends QuorumLockManager {
 
 		$memc = $this->getCache( $lockSrv );
 		// List of affected paths
-		$paths = call_user_func_array( 'array_merge', array_values( $pathsByType ) );
+		$paths = array_merge( ...array_values( $pathsByType ) );
 		$paths = array_unique( $paths );
 		// List of affected lock record keys
 		$keys = array_map( [ $this, 'recordKeyForPath' ], $paths );

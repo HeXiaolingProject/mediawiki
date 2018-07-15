@@ -46,7 +46,7 @@ class TemplateParser {
 	protected $compileFlags = LightnCandy::FLAG_ERROR_EXCEPTION;
 
 	/**
-	 * @param string $templateDir
+	 * @param string|null $templateDir
 	 * @param bool $forceRecompile
 	 */
 	public function __construct( $templateDir = null, $forceRecompile = false ) {
@@ -209,8 +209,11 @@ class TemplateParser {
 	 *     );
 	 * @endcode
 	 * @param string $templateName The name of the template
+	 * @param-taint $templateName exec_misc
 	 * @param mixed $args
+	 * @param-taint $args none
 	 * @param array $scopes
+	 * @param-taint $scopes none
 	 * @return string
 	 */
 	public function processTemplate( $templateName, $args, array $scopes = [] ) {

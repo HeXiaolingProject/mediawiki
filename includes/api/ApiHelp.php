@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Aug 29, 2014
- *
  * Copyright © 2014 Wikimedia Foundation and contributors
  *
  * This program is free software; you can redistribute it and/or modify
@@ -108,6 +104,7 @@ class ApiHelp extends ApiBase {
 		] );
 		if ( !empty( $options['toc'] ) ) {
 			$out->addModules( 'mediawiki.toc' );
+			$out->addModuleStyles( 'mediawiki.toc.styles' );
 		}
 		$out->setPageTitle( $context->msg( 'api-help-title' ) );
 
@@ -153,7 +150,7 @@ class ApiHelp extends ApiBase {
 		}
 		$out->addHTML( $html );
 
-		$helptitle = isset( $options['helptitle'] ) ? $options['helptitle'] : null;
+		$helptitle = $options['helptitle'] ?? null;
 		$html = self::fixHelpLinks( $out->getHTML(), $helptitle, $haveModules );
 		$out->clearHTML();
 		$out->addHTML( $html );
@@ -470,11 +467,23 @@ class ApiHelp extends ApiBase {
 						}
 					}
 
+					// Templated?
+					if ( !empty( $settings[ApiBase::PARAM_TEMPLATE_VARS] ) ) {
+						$vars = [];
+						$msg = 'api-help-param-templated-var-first';
+						foreach ( $settings[ApiBase::PARAM_TEMPLATE_VARS] as $k => $v ) {
+							$vars[] = $context->msg( $msg, $k, $module->encodeParamName( $v ) );
+							$msg = 'api-help-param-templated-var';
+						}
+						$info[] = $context->msg( 'api-help-param-templated' )
+							->numParams( count( $vars ) )
+							->params( Message::listParam( $vars ) )
+							->parse();
+					}
+
 					// Type documentation
 					if ( !isset( $settings[ApiBase::PARAM_TYPE] ) ) {
-						$dflt = isset( $settings[ApiBase::PARAM_DFLT] )
-							? $settings[ApiBase::PARAM_DFLT]
-							: null;
+						$dflt = $settings[ApiBase::PARAM_DFLT] ?? null;
 						if ( is_bool( $dflt ) ) {
 							$settings[ApiBase::PARAM_TYPE] = 'boolean';
 						} elseif ( is_string( $dflt ) || is_null( $dflt ) ) {
@@ -493,12 +502,8 @@ class ApiHelp extends ApiBase {
 
 						if ( is_array( $type ) ) {
 							$count = count( $type );
-							$deprecatedValues = isset( $settings[ApiBase::PARAM_DEPRECATED_VALUES] )
-								? $settings[ApiBase::PARAM_DEPRECATED_VALUES]
-								: [];
-							$links = isset( $settings[ApiBase::PARAM_VALUE_LINKS] )
-								? $settings[ApiBase::PARAM_VALUE_LINKS]
-								: [];
+							$deprecatedValues = $settings[ApiBase::PARAM_DEPRECATED_VALUES] ?? [];
+							$links = $settings[ApiBase::PARAM_VALUE_LINKS] ?? [];
 							$values = array_map( function ( $v ) use ( $links, $deprecatedValues ) {
 								$attr = [];
 								if ( $v !== '' ) {
@@ -697,9 +702,7 @@ class ApiHelp extends ApiBase {
 								$info[] = implode( ' ', $extra );
 							}
 
-							$allowAll = isset( $settings[ApiBase::PARAM_ALL] )
-								? $settings[ApiBase::PARAM_ALL]
-								: false;
+							$allowAll = $settings[ApiBase::PARAM_ALL] ?? false;
 							if ( $allowAll || $settings[ApiBase::PARAM_TYPE] === 'namespace' ) {
 								if ( $settings[ApiBase::PARAM_TYPE] === 'namespace' ) {
 									$allSpecifier = ApiBase::ALL_DEFAULT_STRING;
@@ -723,9 +726,7 @@ class ApiHelp extends ApiBase {
 					}
 
 					// Add default
-					$default = isset( $settings[ApiBase::PARAM_DFLT] )
-						? $settings[ApiBase::PARAM_DFLT]
-						: null;
+					$default = $settings[ApiBase::PARAM_DFLT] ?? null;
 					if ( $default === '' ) {
 						$info[] = $context->msg( 'api-help-param-default-empty' )
 							->parse();

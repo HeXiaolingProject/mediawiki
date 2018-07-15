@@ -21,6 +21,8 @@
  * @ingroup Maintenance
  */
 
+use Wikimedia\Rdbms\IDatabase;
+
 require_once __DIR__ . '/Maintenance.php';
 
 /**
@@ -76,8 +78,8 @@ class PopulateRevisionLength extends LoggedUpdateMaintenance {
 		$dbr = $this->getDB( DB_REPLICA );
 		$dbw = $this->getDB( DB_MASTER );
 		$batchSize = $this->getBatchSize();
-		$start = $dbw->selectField( $table, "MIN($idCol)", false, __METHOD__ );
-		$end = $dbw->selectField( $table, "MAX($idCol)", false, __METHOD__ );
+		$start = $dbw->selectField( $table, "MIN($idCol)", '', __METHOD__ );
+		$end = $dbw->selectField( $table, "MAX($idCol)", '', __METHOD__ );
 		if ( !$start || !$end ) {
 			$this->output( "...$table table seems to be empty.\n" );
 
@@ -97,7 +99,13 @@ class PopulateRevisionLength extends LoggedUpdateMaintenance {
 				[
 					"$idCol >= $blockStart",
 					"$idCol <= $blockEnd",
-					"{$prefix}_len IS NULL"
+					$dbr->makeList( [
+						"{$prefix}_len IS NULL",
+						$dbr->makeList( [
+							"{$prefix}_len = 0",
+							"{$prefix}_sha1 != " . $dbr->addQuotes( 'phoiac9h4m842xq45sp7s6u21eteeq1' ), // sha1( "" )
+						], IDatabase::LIST_AND )
+					], IDatabase::LIST_OR )
 				],
 				__METHOD__,
 				[],
@@ -117,7 +125,6 @@ class PopulateRevisionLength extends LoggedUpdateMaintenance {
 
 			$blockStart += $batchSize;
 			$blockEnd += $batchSize;
-			wfWaitForSlaves();
 		}
 
 		return $count;
@@ -137,7 +144,7 @@ class PopulateRevisionLength extends LoggedUpdateMaintenance {
 			? Revision::newFromArchiveRow( $row )
 			: new Revision( $row );
 
-		$content = $rev->getContent();
+		$content = $rev->getContent( Revision::RAW );
 		if ( !$content ) {
 			# This should not happen, but sometimes does (T22757)
 			$id = $row->$idCol;
@@ -157,5 +164,5 @@ class PopulateRevisionLength extends LoggedUpdateMaintenance {
 	}
 }
 
-$maintClass = "PopulateRevisionLength";
+$maintClass = PopulateRevisionLength::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

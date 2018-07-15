@@ -21,12 +21,14 @@
  * @file
  * @ingroup Parser
  */
+
 class ParserOutput extends CacheTime {
 	/**
-	 * Feature flag to indicate to extensions that MediaWiki core supports and
+	 * Feature flags to indicate to extensions that MediaWiki core supports and
 	 * uses getText() stateless transforms.
 	 */
 	const SUPPORTS_STATELESS_TRANSFORMS = 1;
+	const SUPPORTS_UNWRAP_TRANSFORM = 1;
 
 	/**
 	 * @var string $mText The output text
@@ -150,12 +152,6 @@ class ParserOutput extends CacheTime {
 	public $mSections = [];
 
 	/**
-	 * @deprecated since 1.31 Use getText() options.
-	 * @var bool $mEditSectionTokens prefix/suffix markers if edit sections were output as tokens.
-	 */
-	public $mEditSectionTokens = true;
-
-	/**
 	 * @var array $mProperties Name/value pairs to be cached in the DB.
 	 */
 	public $mProperties = [];
@@ -171,12 +167,6 @@ class ParserOutput extends CacheTime {
 	public $mTimestamp;
 
 	/**
-	 * @deprecated since 1.31 Use getText() options.
-	 * @var bool $mTOCEnabled Whether TOC should be shown, can't override __NOTOC__.
-	 */
-	public $mTOCEnabled = true;
-
-	/**
 	 * @var bool $mEnableOOUI Whether OOUI should be enabled.
 	 */
 	public $mEnableOOUI = false;
@@ -187,7 +177,7 @@ class ParserOutput extends CacheTime {
 	private $mIndexPolicy = '';
 
 	/**
-	 * @var array $mAccessedOptions List of ParserOptions (stored in the keys).
+	 * @var true[] $mAccessedOptions List of ParserOptions (stored in the keys).
 	 */
 	private $mAccessedOptions = [];
 
@@ -266,28 +256,46 @@ class ParserOutput extends CacheTime {
 	 *     to generate one and `__NOTOC__` wasn't used. Default is true,
 	 *     but might be statefully overridden.
 	 *  - enableSectionEditLinks: (bool) Include section edit links, assuming
-	 *    section edit link tokens are present in the HTML. Default is true,
+	 *     section edit link tokens are present in the HTML. Default is true,
 	 *     but might be statefully overridden.
+	 *  - unwrap: (bool) Remove a wrapping mw-parser-output div. Default is false.
+	 *  - deduplicateStyles: (bool) When true, which is the default, `<style>`
+	 *    tags with the `data-mw-deduplicate` attribute set are deduplicated by
+	 *    value of the attribute: all but the first will be replaced by `<link
+	 *    rel="mw-deduplicated-inline-style" href="mw-data:..."/>` tags, where
+	 *    the scheme-specific-part of the href is the (percent-encoded) value
+	 *    of the `data-mw-deduplicate` attribute.
 	 * @return string HTML
 	 */
 	public function getText( $options = [] ) {
-		// @todo Warn if !array_key_exists( 'allowTOC', $options ) && empty( $this->mTOCEnabled )
-
-		// @todo Warn if !array_key_exists( 'enableSectionEditLinks', $options )
-		//     && !$this->mEditSectionTokens
-		//  Note that while $this->mEditSectionTokens formerly defaulted to false,
-		//  ParserOptions->getEditSection() defaults to true and Parser copies
-		//  that to us so true makes more sense as the stateless default.
-
 		$options += [
-			// empty() here because old cached versions might lack the field somehow.
-			// In that situation, the historical behavior (possibly buggy) is to remove the TOC.
-			'allowTOC' => !empty( $this->mTOCEnabled ),
-			'enableSectionEditLinks' => $this->mEditSectionTokens,
+			'allowTOC' => true,
+			'enableSectionEditLinks' => true,
+			'unwrap' => false,
+			'deduplicateStyles' => true,
 		];
 		$text = $this->mText;
 
 		Hooks::runWithoutAbort( 'ParserOutputPostCacheTransform', [ $this, &$text, &$options ] );
+
+		if ( $options['unwrap'] !== false ) {
+			$start = Html::openElement( 'div', [
+				'class' => 'mw-parser-output'
+			] );
+			$startLen = strlen( $start );
+			$end = Html::closeElement( 'div' );
+			$endPos = strrpos( $text, $end );
+			$endLen = strlen( $end );
+
+			if ( substr( $text, 0, $startLen ) === $start && $endPos !== false
+				// if the closing div is followed by real content, bail out of unwrapping
+				&& preg_match( '/^(?>\s*<!--.*?-->)*\s*$/s', substr( $text, $endPos + $endLen ) )
+			) {
+				$text = substr( $text, $startLen );
+				$text = substr( $text, 0, $endPos - $startLen )
+					. substr( $text, $endPos - $startLen + $endLen );
+			}
+		}
 
 		if ( $options['enableSectionEditLinks'] ) {
 			$text = preg_replace_callback(
@@ -303,10 +311,10 @@ class ParserOutput extends CacheTime {
 					}
 
 					$skin = $wgOut->getSkin();
-					return call_user_func_array(
-						[ $skin, 'doEditSectionLink' ],
-						[ $editsectionPage, $editsectionSection,
-							$editsectionContent, $wgLang->getCode() ]
+					return $skin->doEditSectionLink( $editsectionPage,
+						$editsectionSection,
+						$editsectionContent,
+						$wgLang->getCode()
 					);
 				},
 				$text
@@ -321,6 +329,35 @@ class ParserOutput extends CacheTime {
 			$text = preg_replace(
 				'#' . preg_quote( Parser::TOC_START, '#' ) . '.*?' . preg_quote( Parser::TOC_END, '#' ) . '#s',
 				'',
+				$text
+			);
+		}
+
+		if ( $options['deduplicateStyles'] ) {
+			$seen = [];
+			$text = preg_replace_callback(
+				'#<style\s+([^>]*data-mw-deduplicate\s*=[^>]*)>.*?</style>#s',
+				function ( $m ) use ( &$seen ) {
+					$attr = Sanitizer::decodeTagAttributes( $m[1] );
+					if ( !isset( $attr['data-mw-deduplicate'] ) ) {
+						return $m[0];
+					}
+
+					$key = $attr['data-mw-deduplicate'];
+					if ( !isset( $seen[$key] ) ) {
+						$seen[$key] = true;
+						return $m[0];
+					}
+
+					// We were going to use an empty <style> here, but there
+					// was concern that would be too much overhead for browsers.
+					// So let's hope a <link> with a non-standard rel and href isn't
+					// going to be misinterpreted or mangled by any subsequent processing.
+					return Html::element( 'link', [
+						'rel' => 'mw-deduplicated-inline-style',
+						'href' => "mw-data:" . wfUrlencode( $key ),
+					] );
+				},
 				$text
 			);
 		}
@@ -380,7 +417,8 @@ class ParserOutput extends CacheTime {
 	 * @deprecated since 1.31 Use getText() options.
 	 */
 	public function getEditSectionTokens() {
-		return $this->mEditSectionTokens;
+		wfDeprecated( __METHOD__, '1.31' );
+		return true;
 	}
 
 	public function &getLinks() {
@@ -470,7 +508,8 @@ class ParserOutput extends CacheTime {
 	 * @deprecated since 1.31 Use getText() options.
 	 */
 	public function getTOCEnabled() {
-		return $this->mTOCEnabled;
+		wfDeprecated( __METHOD__, '1.31' );
+		return true;
 	}
 
 	public function getEnableOOUI() {
@@ -501,7 +540,8 @@ class ParserOutput extends CacheTime {
 	 * @deprecated since 1.31 Use getText() options.
 	 */
 	public function setEditSectionTokens( $t ) {
-		return wfSetVar( $this->mEditSectionTokens, $t );
+		wfDeprecated( __METHOD__, '1.31' );
+		return true;
 	}
 
 	public function setIndexPolicy( $policy ) {
@@ -520,7 +560,8 @@ class ParserOutput extends CacheTime {
 	 * @deprecated since 1.31 Use getText() options.
 	 */
 	public function setTOCEnabled( $flag ) {
-		return wfSetVar( $this->mTOCEnabled, $flag );
+		wfDeprecated( __METHOD__, '1.31' );
+		return true;
 	}
 
 	public function addCategory( $c, $sort ) {
@@ -644,9 +685,8 @@ class ParserOutput extends CacheTime {
 	/**
 	 * Register a file dependency for this output
 	 * @param string $name Title dbKey
-	 * @param string $timestamp MW timestamp of file creation (or false if non-existing)
-	 * @param string $sha1 Base 36 SHA-1 of file (or false if non-existing)
-	 * @return void
+	 * @param string|false|null $timestamp MW timestamp of file creation (or false if non-existing)
+	 * @param string|false|null $sha1 Base 36 SHA-1 of file (or false if non-existing)
 	 */
 	public function addImage( $name, $timestamp = null, $sha1 = null ) {
 		$this->mImages[$name] = 1;
@@ -660,7 +700,6 @@ class ParserOutput extends CacheTime {
 	 * @param Title $title
 	 * @param int $page_id
 	 * @param int $rev_id
-	 * @return void
 	 */
 	public function addTemplate( $title, $page_id, $rev_id ) {
 		$ns = $title->getNamespace();
@@ -705,14 +744,24 @@ class ParserOutput extends CacheTime {
 		}
 	}
 
+	/**
+	 * @see OutputPage::addModules
+	 */
 	public function addModules( $modules ) {
 		$this->mModules = array_merge( $this->mModules, (array)$modules );
 	}
 
+	/**
+	 * @deprecated since 1.31 Use addModules() instead.
+	 * @see OutputPage::addModuleScripts
+	 */
 	public function addModuleScripts( $modules ) {
 		$this->mModuleScripts = array_merge( $this->mModuleScripts, (array)$modules );
 	}
 
+	/**
+	 * @see OutputPage::addModuleStyles
+	 */
 	public function addModuleStyles( $modules ) {
 		$this->mModuleStyles = array_merge( $this->mModuleStyles, (array)$modules );
 	}
@@ -721,7 +770,7 @@ class ParserOutput extends CacheTime {
 	 * Add one or more variables to be set in mw.config in JavaScript.
 	 *
 	 * @param string|array $keys Key or array of key/value pairs.
-	 * @param mixed $value [optional] Value of the configuration variable.
+	 * @param mixed|null $value [optional] Value of the configuration variable.
 	 * @since 1.23
 	 */
 	public function addJsConfigVars( $keys, $value = null ) {
@@ -857,8 +906,7 @@ class ParserOutput extends CacheTime {
 	 *   * To implement hidden categories, hiding pages from category listings
 	 *     by storing a property.
 	 *
-	 *   * Overriding the displayed article title.
-	 *   @see ParserOutput::setDisplayTitle()
+	 *   * Overriding the displayed article title (ParserOutput::setDisplayTitle()).
 	 *
 	 *   * To implement image tagging, for example displaying an icon on an
 	 *     image thumbnail to indicate that it is listed for deletion on
@@ -911,7 +959,7 @@ class ParserOutput extends CacheTime {
 	 * @note You need to use getProperties() to check for boolean and null properties.
 	 */
 	public function getProperty( $name ) {
-		return isset( $this->mProperties[$name] ) ? $this->mProperties[$name] : false;
+		return $this->mProperties[$name] ?? false;
 	}
 
 	public function unsetProperty( $name ) {
@@ -927,8 +975,8 @@ class ParserOutput extends CacheTime {
 
 	/**
 	 * Returns the options from its ParserOptions which have been taken
-	 * into account to produce this output or false if not available.
-	 * @return array
+	 * into account to produce this output.
+	 * @return string[]
 	 */
 	public function getUsedOptions() {
 		if ( !isset( $this->mAccessedOptions ) ) {

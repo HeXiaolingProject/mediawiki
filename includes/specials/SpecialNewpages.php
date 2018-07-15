@@ -207,7 +207,6 @@ class SpecialNewpages extends IncludableSpecialPage {
 
 	protected function form() {
 		$out = $this->getOutput();
-		$out->addModules( 'mediawiki.userSuggest' );
 
 		// Consume values
 		$this->opts->consumeValue( 'offset' ); // don't carry offset, DWIW
@@ -251,13 +250,12 @@ class SpecialNewpages extends IncludableSpecialPage {
 				'default' => $tagFilterVal,
 			],
 			'username' => [
-				'type' => 'text',
+				'type' => 'user',
 				'name' => 'username',
 				'label-message' => 'newpages-username',
 				'default' => $userText,
 				'id' => 'mw-np-username',
 				'size' => 30,
-				'cssclass' => 'mw-autocomplete-user', // used by mediawiki.userSuggest
 			],
 			'size' => [
 				'type' => 'sizefilter',
@@ -269,7 +267,6 @@ class SpecialNewpages extends IncludableSpecialPage {
 		$htmlForm = new HTMLForm( $form, $this->getContext() );
 
 		$htmlForm->setSubmitText( $this->msg( 'newpages-submit' )->text() );
-		$htmlForm->setSubmitProgressive();
 		// The form should be visible on each request (inclusive requests with submitted forms), so
 		// return always false here.
 		$htmlForm->setSubmitCallback(
@@ -295,10 +292,11 @@ class SpecialNewpages extends IncludableSpecialPage {
 	 */
 	protected function revisionFromRcResult( stdClass $result, Title $title ) {
 		return new Revision( [
-			'comment' => CommentStore::newKey( 'rc_comment' )->getComment( $result )->text,
+			'comment' => CommentStore::getStore()->getComment( 'rc_comment', $result )->text,
 			'deleted' => $result->rc_deleted,
 			'user_text' => $result->rc_user_text,
 			'user' => $result->rc_user,
+			'actor' => $result->rc_actor,
 		], 0, $title );
 	}
 
@@ -485,7 +483,7 @@ class SpecialNewpages extends IncludableSpecialPage {
 	}
 
 	protected function feedItemAuthor( $row ) {
-		return isset( $row->rc_user_text ) ? $row->rc_user_text : '';
+		return $row->rc_user_text ?? '';
 	}
 
 	protected function feedItemDesc( $row ) {

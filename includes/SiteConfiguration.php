@@ -20,6 +20,8 @@
  * @file
  */
 
+use MediaWiki\Shell\Shell;
+
 /**
  * This is a class for holding configuration settings, particularly for
  * multi-wiki sites.
@@ -178,7 +180,7 @@ class SiteConfiguration {
 	 * Retrieves a configuration setting for a given wiki.
 	 * @param string $settingName ID of the setting name to retrieve
 	 * @param string $wiki Wiki ID of the wiki in question.
-	 * @param string $suffix The suffix of the wiki in question.
+	 * @param string|null $suffix The suffix of the wiki in question.
 	 * @param array $params List of parameters. $.'key' is replaced by $value in all returned data.
 	 * @param array $wikiTags The tags assigned to the wiki.
 	 * @return mixed The value of the setting requested.
@@ -292,7 +294,7 @@ class SiteConfiguration {
 	/**
 	 * Gets all settings for a wiki
 	 * @param string $wiki Wiki ID of the wiki in question.
-	 * @param string $suffix The suffix of the wiki in question.
+	 * @param string|null $suffix The suffix of the wiki in question.
 	 * @param array $params List of parameters. $.'key' is replaced by $value in all returned data.
 	 * @param array $wikiTags The tags assigned to the wiki.
 	 * @return array Array of settings requested.
@@ -323,7 +325,7 @@ class SiteConfiguration {
 	 * Retrieves a configuration setting for a given wiki, forced to a boolean.
 	 * @param string $setting ID of the setting name to retrieve
 	 * @param string $wiki Wiki ID of the wiki in question.
-	 * @param string $suffix The suffix of the wiki in question.
+	 * @param string|null $suffix The suffix of the wiki in question.
 	 * @param array $wikiTags The tags assigned to the wiki.
 	 * @return bool The value of the setting requested.
 	 */
@@ -362,7 +364,7 @@ class SiteConfiguration {
 	 * Retrieves the value of a given setting, and places it in its corresponding global variable.
 	 * @param string $setting ID of the setting name to retrieve
 	 * @param string $wiki Wiki ID of the wiki in question.
-	 * @param string $suffix The suffix of the wiki in question.
+	 * @param string|null $suffix The suffix of the wiki in question.
 	 * @param array $params List of parameters. $.'key' is replaced by $value in all returned data.
 	 * @param array $wikiTags The tags assigned to the wiki.
 	 */
@@ -397,7 +399,7 @@ class SiteConfiguration {
 	/**
 	 * Retrieves the values of all settings, and places them in their corresponding global variables.
 	 * @param string $wiki Wiki ID of the wiki in question.
-	 * @param string $suffix The suffix of the wiki in question.
+	 * @param string|null $suffix The suffix of the wiki in question.
 	 * @param array $params List of parameters. $.'key' is replaced by $value in all returned data.
 	 * @param array $wikiTags The tags assigned to the wiki.
 	 */
@@ -430,7 +432,7 @@ class SiteConfiguration {
 			return $default;
 		}
 
-		$ret = call_user_func_array( $this->siteParamsCallback, [ $this, $wiki ] );
+		$ret = ( $this->siteParamsCallback )( $this, $wiki );
 		# Validate the returned value
 		if ( !is_array( $ret ) ) {
 			return $default;
@@ -546,19 +548,21 @@ class SiteConfiguration {
 			} else {
 				$this->cfgCache[$wiki] = [];
 			}
-			$retVal = 1;
-			$cmd = wfShellWikiCmd(
+			$result = Shell::makeScriptCommand(
 				"$IP/maintenance/getConfiguration.php",
 				[
 					'--wiki', $wiki,
 					'--settings', implode( ' ', $settings ),
-					'--format', 'PHP'
+					'--format', 'PHP',
 				]
-			);
-			// ulimit5.sh breaks this call
-			$data = trim( wfShellExec( $cmd, $retVal, [], [ 'memory' => 0, 'filesize' => 0 ] ) );
-			if ( $retVal != 0 || !strlen( $data ) ) {
-				throw new MWException( "Failed to run getConfiguration.php." );
+			)
+				// limit.sh breaks this call
+				->limits( [ 'memory' => 0, 'filesize' => 0 ] )
+				->execute();
+
+			$data = trim( $result->getStdout() );
+			if ( $result->getExitCode() != 0 || !strlen( $data ) ) {
+				throw new MWException( "Failed to run getConfiguration.php: {$result->getStdout()}" );
 			}
 			$res = unserialize( $data );
 			if ( !is_array( $res ) ) {
@@ -602,7 +606,7 @@ class SiteConfiguration {
 
 	public function loadFullData() {
 		if ( $this->fullLoadCallback && !$this->fullLoadDone ) {
-			call_user_func( $this->fullLoadCallback, $this );
+			( $this->fullLoadCallback )( $this );
 			$this->fullLoadDone = true;
 		}
 	}

@@ -31,6 +31,7 @@ use Status;
 use StatusValue;
 use User;
 use WebRequest;
+use Wikimedia\ObjectFactory;
 
 /**
  * This serves as the entry point to the authentication system.
@@ -239,7 +240,7 @@ class AuthManager implements LoggerAwareInterface {
 		global $wgAuth;
 
 		if ( $wgAuth && !$wgAuth instanceof AuthManagerAuthPlugin ) {
-			return call_user_func_array( [ $wgAuth, $method ], $params );
+			return $wgAuth->$method( ...$params );
 		} else {
 			return $return;
 		}
@@ -770,7 +771,12 @@ class AuthManager implements LoggerAwareInterface {
 			$status = self::SEC_FAIL;
 		}
 
-		$this->logger->info( __METHOD__ . ": $operation is $status" );
+		$this->logger->info( __METHOD__ . ": $operation is $status for '{user}'",
+			[
+				'user' => $session->getUser()->getName(),
+				'clientip' => $this->getRequest()->getIP(),
+			]
+		);
 
 		return $status;
 	}
@@ -984,7 +990,7 @@ class AuthManager implements LoggerAwareInterface {
 		if ( $permErrors ) {
 			$status = Status::newGood();
 			foreach ( $permErrors as $args ) {
-				call_user_func_array( [ $status, 'fatal' ], $args );
+				$status->fatal( ...$args );
 			}
 			return $status;
 		}
@@ -1415,7 +1421,7 @@ class AuthManager implements LoggerAwareInterface {
 				$state['userid'] = $user->getId();
 
 				// Update user count
-				\DeferredUpdates::addUpdate( new \SiteStatsUpdate( 0, 0, 0, 0, 1 ) );
+				\DeferredUpdates::addUpdate( \SiteStatsUpdate::factory( [ 'users' => 1 ] ) );
 
 				// Watch user's userpage and talk page
 				$user->addWatch( $user->getUserPage(), User::IGNORE_USER_RIGHTS );
@@ -1551,7 +1557,10 @@ class AuthManager implements LoggerAwareInterface {
 		// Fetch the user ID from the master, so that we don't try to create the user
 		// when they already exist, due to replication lag
 		// @codeCoverageIgnoreStart
-		if ( !$localId && wfGetLB()->getReaderIndex() != 0 ) {
+		if (
+			!$localId &&
+			MediaWikiServices::getInstance()->getDBLoadBalancer()->getReaderIndex() != 0
+		) {
 			$localId = User::idFromName( $username, User::READ_LATEST );
 			$flags = User::READ_LATEST;
 		}
@@ -1671,7 +1680,7 @@ class AuthManager implements LoggerAwareInterface {
 		}
 
 		// Checks passed, create the user...
-		$from = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : 'CLI';
+		$from = $_SERVER['REQUEST_URI'] ?? 'CLI';
 		$this->logger->info( __METHOD__ . ': creating new user ({username}) - from: {from}', [
 			'username' => $username,
 			'from' => $from,
@@ -1726,7 +1735,7 @@ class AuthManager implements LoggerAwareInterface {
 		$user->saveSettings();
 
 		// Update user count
-		\DeferredUpdates::addUpdate( new \SiteStatsUpdate( 0, 0, 0, 0, 1 ) );
+		\DeferredUpdates::addUpdate( \SiteStatsUpdate::factory( [ 'users' => 1 ] ) );
 		// Watch user's userpage and talk page
 		\DeferredUpdates::addCallableUpdate( function () use ( $user ) {
 			$user->addWatch( $user->getUserPage(), User::IGNORE_USER_RIGHTS );
@@ -2240,7 +2249,7 @@ class AuthManager implements LoggerAwareInterface {
 	 * Fetch authentication data from the current session
 	 * @protected For use by AuthenticationProviders
 	 * @param string $key
-	 * @param mixed $default
+	 * @param mixed|null $default
 	 * @return mixed
 	 */
 	public function getAuthenticationSessionData( $key, $default = null ) {
@@ -2282,14 +2291,15 @@ class AuthManager implements LoggerAwareInterface {
 			$spec = [ 'sort2' => $i++ ] + $spec + [ 'sort' => 0 ];
 		}
 		unset( $spec );
+		// Sort according to the 'sort' field, and if they are equal, according to 'sort2'
 		usort( $specs, function ( $a, $b ) {
-			return ( (int)$a['sort'] ) - ( (int)$b['sort'] )
-				?: $a['sort2'] - $b['sort2'];
+			return $a['sort'] <=> $b['sort']
+				?: $a['sort2'] <=> $b['sort2'];
 		} );
 
 		$ret = [];
 		foreach ( $specs as $spec ) {
-			$provider = \ObjectFactory::getObjectFromSpec( $spec );
+			$provider = ObjectFactory::getObjectFromSpec( $spec );
 			if ( !$provider instanceof $class ) {
 				throw new \RuntimeException(
 					"Expected instance of $class, got " . get_class( $provider )
@@ -2422,7 +2432,7 @@ class AuthManager implements LoggerAwareInterface {
 			$providers += $this->getSecondaryAuthenticationProviders();
 		}
 		foreach ( $providers as $provider ) {
-			call_user_func_array( [ $provider, $method ], $args );
+			$provider->$method( ...$args );
 		}
 	}
 

@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Sep 25, 2006
- *
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -58,7 +54,7 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 					$fit = $this->appendMagicWords( $p );
 					break;
 				case 'interwikimap':
-					$filteriw = isset( $params['filteriw'] ) ? $params['filteriw'] : false;
+					$filteriw = $params['filteriw'] ?? false;
 					$fit = $this->appendInterwikiMap( $p, $filteriw );
 					break;
 				case 'dbrepllag':
@@ -227,7 +223,7 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 		if ( $data['readonly'] ) {
 			$data['readonlyreason'] = wfReadOnlyReason();
 		}
-		$data['writeapi'] = (bool)$config->get( 'EnableWriteAPI' );
+		$data['writeapi'] = true; // Deprecated since MW 1.32
 
 		$data['maxarticlesize'] = $config->get( 'MaxArticleSize' ) * 1024;
 
@@ -391,7 +387,7 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 		}
 
 		$params = $this->extractRequestParams();
-		$langCode = isset( $params['inlanguagecode'] ) ? $params['inlanguagecode'] : '';
+		$langCode = $params['inlanguagecode'] ?? '';
 		$langNames = Language::fetchLanguageNames( $langCode );
 
 		$getPrefixes = MediaWikiServices::getInstance()->getInterwikiLookup()->getAllPrefixes( $local );
@@ -449,7 +445,7 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 
 	protected function appendDbReplLagInfo( $property, $includeAll ) {
 		$data = [];
-		$lb = wfGetLB();
+		$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
 		$showHostnames = $this->getConfig()->get( 'ShowHostnames' );
 		if ( $includeAll ) {
 			if ( !$showHostnames ) {
@@ -469,7 +465,7 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 				'host' => $showHostnames
 						? $lb->getServerName( $index )
 						: '',
-				'lag' => intval( $lag )
+				'lag' => $lag
 			];
 		}
 
@@ -633,7 +629,7 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 					}
 
 					if ( SpecialVersion::getExtLicenseFileName( $extensionPath ) ) {
-						$ret['license-name'] = isset( $ext['license-name'] ) ? $ext['license-name'] : '';
+						$ret['license-name'] = $ext['license-name'] ?? '';
 						$ret['license'] = SpecialPage::getTitleFor(
 							'Version',
 							"License/{$ext['name']}"
@@ -703,13 +699,16 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 
 	public function appendLanguages( $property ) {
 		$params = $this->extractRequestParams();
-		$langCode = isset( $params['inlanguagecode'] ) ? $params['inlanguagecode'] : '';
+		$langCode = $params['inlanguagecode'] ?? '';
 		$langNames = Language::fetchLanguageNames( $langCode );
 
 		$data = [];
 
 		foreach ( $langNames as $code => $name ) {
-			$lang = [ 'code' => $code ];
+			$lang = [
+				'code' => $code,
+				'bcp47' => LanguageCode::bcp47( $code ),
+			];
 			ApiResult::setContentValue( $lang, 'name', $name );
 			$data[] = $lang;
 		}
@@ -852,7 +851,7 @@ class ApiQuerySiteinfo extends ApiQueryBase {
 		foreach ( $myWgHooks as $name => $subscribers ) {
 			$arr = [
 				'name' => $name,
-				'subscribers' => array_map( [ 'SpecialVersion', 'arrayToString' ], $subscribers ),
+				'subscribers' => array_map( [ SpecialVersion::class, 'arrayToString' ], $subscribers ),
 			];
 
 			ApiResult::setArrayType( $arr['subscribers'], 'array' );

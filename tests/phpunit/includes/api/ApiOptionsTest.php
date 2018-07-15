@@ -22,7 +22,7 @@ class ApiOptionsTest extends MediaWikiLangTestCase {
 	protected function setUp() {
 		parent::setUp();
 
-		$this->mUserMock = $this->getMockBuilder( 'User' )
+		$this->mUserMock = $this->getMockBuilder( User::class )
 			->disableOriginalConstructor()
 			->getMock();
 
@@ -66,7 +66,7 @@ class ApiOptionsTest extends MediaWikiLangTestCase {
 			$preferences[$k] = [
 				'type' => 'text',
 				'section' => 'test',
-				'label' => '&#160;',
+				'label' => "\u{00A0}",
 			];
 		}
 
@@ -81,7 +81,7 @@ class ApiOptionsTest extends MediaWikiLangTestCase {
 				],
 			],
 			'section' => 'test',
-			'label' => '&#160;',
+			'label' => "\u{00A0}",
 			'prefix' => 'testmultiselect-',
 			'default' => [],
 		];

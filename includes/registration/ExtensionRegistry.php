@@ -1,7 +1,5 @@
 <?php
 
-use MediaWiki\MediaWikiServices;
-
 /**
  * ExtensionRegistry class
  *
@@ -20,8 +18,15 @@ class ExtensionRegistry {
 
 	/**
 	 * Version of the highest supported manifest version
+	 * Note: Update MANIFEST_VERSION_MW_VERSION when changing this
 	 */
 	const MANIFEST_VERSION = 2;
+
+	/**
+	 * MediaWiki version constraint representing what the current
+	 * highest MANIFEST_VERSION is supported in
+	 */
+	const MANIFEST_VERSION_MW_VERSION = '>= 1.29.0';
 
 	/**
 	 * Version of the oldest supported manifest version
@@ -75,6 +80,7 @@ class ExtensionRegistry {
 	private static $instance;
 
 	/**
+	 * @codeCoverageIgnore
 	 * @return ExtensionRegistry
 	 */
 	public static function getInstance() {
@@ -98,9 +104,11 @@ class ExtensionRegistry {
 			} else {
 				throw new Exception( "$path does not exist!" );
 			}
-			if ( !$mtime ) {
+			// @codeCoverageIgnoreStart
+			if ( $mtime === false ) {
 				$err = error_get_last();
 				throw new Exception( "Couldn't stat $path: {$err['message']}" );
+				// @codeCoverageIgnoreEnd
 			}
 		}
 		$this->queued[$path] = $mtime;
@@ -132,8 +140,11 @@ class ExtensionRegistry {
 		// We use a try/catch because we don't want to fail here
 		// if $wgObjectCaches is not configured properly for APC setup
 		try {
-			$cache = MediaWikiServices::getInstance()->getLocalServerObjectCache();
-		} catch ( MWException $e ) {
+			// Don't use MediaWikiServices here to prevent instantiating it before extensions have
+			// been loaded
+			$cacheId = ObjectCache::detectLocalServerCache();
+			$cache = ObjectCache::newFromId( $cacheId );
+		} catch ( InvalidArgumentException $e ) {
 			$cache = new EmptyBagOStuff();
 		}
 		// See if this queue is in APC
@@ -192,6 +203,7 @@ class ExtensionRegistry {
 	 * @param array $queue keys are filenames, values are ignored
 	 * @return array extracted info
 	 * @throws Exception
+	 * @throws ExtensionDependencyError
 	 */
 	public function readFromQueue( array $queue ) {
 		global $wgVersion;
@@ -235,6 +247,7 @@ class ExtensionRegistry {
 			}
 			if ( isset( $info['AutoloadNamespaces'] ) ) {
 				$autoloadNamespaces += $this->processAutoLoader( $dir, $info['AutoloadNamespaces'] );
+				AutoLoader::$psr4Namespaces += $autoloadNamespaces;
 			}
 
 			// get all requirements/dependencies for this extension
@@ -263,11 +276,7 @@ class ExtensionRegistry {
 		);
 
 		if ( $incompatible ) {
-			if ( count( $incompatible ) === 1 ) {
-				throw new Exception( $incompatible[0] );
-			} else {
-				throw new Exception( implode( "\n", $incompatible ) );
-			}
+			throw new ExtensionDependencyError( $incompatible );
 		}
 
 		// Need to set this so we can += to it later
@@ -291,7 +300,7 @@ class ExtensionRegistry {
 
 			// Optimistic: If the global is not set, or is an empty array, replace it entirely.
 			// Will be O(1) performance.
-			if ( !isset( $GLOBALS[$key] ) || ( is_array( $GLOBALS[$key] ) && !$GLOBALS[$key] ) ) {
+			if ( !array_key_exists( $key, $GLOBALS ) || ( is_array( $GLOBALS[$key] ) && !$GLOBALS[$key] ) ) {
 				$GLOBALS[$key] = $val;
 				continue;
 			}
@@ -397,16 +406,6 @@ class ExtensionRegistry {
 	 */
 	public function getAllThings() {
 		return $this->loaded;
-	}
-
-	/**
-	 * Mark a thing as loaded
-	 *
-	 * @param string $name
-	 * @param array $credits
-	 */
-	protected function markLoaded( $name, array $credits ) {
-		$this->loaded[$name] = $credits;
 	}
 
 	/**

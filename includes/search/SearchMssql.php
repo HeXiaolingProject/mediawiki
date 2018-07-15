@@ -21,6 +21,8 @@
  * @ingroup Search
  */
 
+use Wikimedia\Rdbms\IResultWrapper;
+
 /**
  * Search engine hook base class for Mssql (ConText).
  * @ingroup Search
@@ -31,9 +33,8 @@ class SearchMssql extends SearchDatabase {
 	 *
 	 * @param string $term Raw search term
 	 * @return SqlSearchResultSet
-	 * @access public
 	 */
-	function searchText( $term ) {
+	protected function doSearchText( $term ) {
 		$resultSet = $this->db->query( $this->getQuery( $this->filter( $term ), true ) );
 		return new SqlSearchResultSet( $resultSet, $this->searchTerms );
 	}
@@ -43,9 +44,8 @@ class SearchMssql extends SearchDatabase {
 	 *
 	 * @param string $term Raw search term
 	 * @return SqlSearchResultSet
-	 * @access public
 	 */
-	function searchTitle( $term ) {
+	protected function doSearchTitle( $term ) {
 		$resultSet = $this->db->query( $this->getQuery( $this->filter( $term ), false ) );
 		return new SqlSearchResultSet( $resultSet, $this->searchTerms );
 	}
@@ -54,9 +54,8 @@ class SearchMssql extends SearchDatabase {
 	 * Return a partial WHERE clause to limit the search to the given namespaces
 	 *
 	 * @return string
-	 * @private
 	 */
-	function queryNamespaces() {
+	private function queryNamespaces() {
 		$namespaces = implode( ',', $this->namespaces );
 		if ( $namespaces == '' ) {
 			$namespaces = '0';
@@ -71,7 +70,7 @@ class SearchMssql extends SearchDatabase {
 	 *
 	 * @return string
 	 */
-	function queryLimit( $sql ) {
+	private function queryLimit( $sql ) {
 		return $this->db->limitResult( $sql, $this->limit, $this->offset );
 	}
 
@@ -95,7 +94,7 @@ class SearchMssql extends SearchDatabase {
 	 * @param bool $fulltext
 	 * @return string
 	 */
-	function getQuery( $filteredTerm, $fulltext ) {
+	private function getQuery( $filteredTerm, $fulltext ) {
 		return $this->queryLimit( $this->queryMain( $filteredTerm, $fulltext ) . ' ' .
 			$this->queryNamespaces() . ' ' .
 			$this->queryRanking( $filteredTerm, $fulltext ) . ' ' );
@@ -117,9 +116,8 @@ class SearchMssql extends SearchDatabase {
 	 * @param string $filteredTerm
 	 * @param bool $fulltext
 	 * @return string
-	 * @private
 	 */
-	function queryMain( $filteredTerm, $fulltext ) {
+	private function queryMain( $filteredTerm, $fulltext ) {
 		$match = $this->parseQuery( $filteredTerm, $fulltext );
 		$page = $this->db->tableName( 'page' );
 		$searchindex = $this->db->tableName( 'searchindex' );
@@ -134,7 +132,7 @@ class SearchMssql extends SearchDatabase {
 	 * @param bool $fulltext
 	 * @return string
 	 */
-	function parseQuery( $filteredText, $fulltext ) {
+	private function parseQuery( $filteredText, $fulltext ) {
 		global $wgContLang;
 		$lc = $this->legalSearchChars( self::CHARS_NO_SYNTAX );
 		$this->searchTerms = [];
@@ -172,7 +170,7 @@ class SearchMssql extends SearchDatabase {
 	 * @param int $id
 	 * @param string $title
 	 * @param string $text
-	 * @return bool|ResultWrapper
+	 * @return bool|IResultWrapper
 	 */
 	function update( $id, $title, $text ) {
 		// We store the column data as UTF-8 byte order marked binary stream
@@ -195,7 +193,7 @@ class SearchMssql extends SearchDatabase {
 	 *
 	 * @param int $id
 	 * @param string $title
-	 * @return bool|ResultWrapper
+	 * @return bool|IResultWrapper
 	 */
 	function updateTitle( $id, $title ) {
 		$table = $this->db->tableName( 'searchindex' );

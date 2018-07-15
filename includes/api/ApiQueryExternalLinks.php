@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on May 13, 2007
- *
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -70,7 +66,7 @@ class ApiQueryExternalLinks extends ApiQueryBase {
 		}
 
 		$this->addOption( 'LIMIT', $params['limit'] + 1 );
-		$offset = isset( $params['offset'] ) ? $params['offset'] : 0;
+		$offset = $params['offset'] ?? 0;
 		if ( $offset ) {
 			$this->addOption( 'OFFSET', $params['offset'] );
 		}

@@ -33,7 +33,7 @@ use MediaWiki\MediaWikiServices;
 class SpecialUpload extends SpecialPage {
 	/**
 	 * Get data POSTed through the form and assign them to the object
-	 * @param WebRequest $request Data posted.
+	 * @param WebRequest|null $request Data posted.
 	 */
 	public function __construct( $request = null ) {
 		parent::__construct( 'Upload', 'upload' );
@@ -387,7 +387,7 @@ class SpecialUpload extends SpecialPage {
 		}
 
 		// Add styles for the warning, reused from the live preview
-		$this->getOutput()->addModuleStyles( 'mediawiki.special.upload.styles' );
+		$this->getOutput()->addModuleStyles( 'mediawiki.special' );
 
 		$linkRenderer = $this->getLinkRenderer();
 		$warningHtml = '<h2>' . $this->msg( 'uploadwarning' )->escaped() . "</h2>\n"
@@ -587,7 +587,7 @@ class SpecialUpload extends SpecialPage {
 	 * @param string $license
 	 * @param string $copyStatus
 	 * @param string $source
-	 * @param Config $config Configuration object to load data from
+	 * @param Config|null $config Configuration object to load data from
 	 * @return string
 	 */
 	public static function getInitialPageText( $comment = '', $license = '',
@@ -612,24 +612,28 @@ class SpecialUpload extends SpecialPage {
 			}
 		}
 
-		if ( $config->get( 'UseCopyrightUpload' ) ) {
-			$licensetxt = '';
-			if ( $license != '' ) {
-				$licensetxt = '== ' . $msg['license-header'] . " ==\n" . '{{' . $license . '}}' . "\n";
-			}
-			$pageText = '== ' . $msg['filedesc'] . " ==\n" . $comment . "\n" .
-				'== ' . $msg['filestatus'] . " ==\n" . $copyStatus . "\n" .
-				"$licensetxt" .
-				'== ' . $msg['filesource'] . " ==\n" . $source;
-		} else {
-			if ( $license != '' ) {
-				$filedesc = $comment == '' ? '' : '== ' . $msg['filedesc'] . " ==\n" . $comment . "\n";
-					$pageText = $filedesc .
-					'== ' . $msg['license-header'] . " ==\n" . '{{' . $license . '}}' . "\n";
-			} else {
-				$pageText = $comment;
-			}
+		$licenseText = '';
+		if ( $license !== '' ) {
+			$licenseText = '== ' . $msg['license-header'] . " ==\n{{" . $license . "}}\n";
 		}
+
+		$pageText = $comment . "\n";
+		$headerText = '== ' . $msg['filedesc'] . ' ==';
+		if ( $comment !== '' && strpos( $comment, $headerText ) === false ) {
+			// prepend header to page text unless it's already there (or there is no content)
+			$pageText = $headerText . "\n" . $pageText;
+		}
+
+		if ( $config->get( 'UseCopyrightUpload' ) ) {
+			$pageText .= '== ' . $msg['filestatus'] . " ==\n" . $copyStatus . "\n";
+			$pageText .= $licenseText;
+			$pageText .= '== ' . $msg['filesource'] . " ==\n" . $source;
+		} else {
+			$pageText .= $licenseText;
+		}
+
+		// allow extensions to modify the content
+		Hooks::run( 'UploadForm:getInitialPageText', [ &$pageText, $msg, $config ] );
 
 		return $pageText;
 	}
@@ -757,7 +761,11 @@ class SpecialUpload extends SpecialPage {
 		}
 		$success = $this->mUpload->unsaveUploadedFile();
 		if ( !$success ) {
-			$this->getOutput()->showFileDeleteError( $this->mUpload->getTempPath() );
+			$this->getOutput()->showFatalError(
+				$this->msg( 'filedeleteerror' )
+					->params( $this->mUpload->getTempPath() )
+					->escaped()
+			);
 
 			return false;
 		} else {

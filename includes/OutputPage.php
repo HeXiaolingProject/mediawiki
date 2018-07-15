@@ -20,11 +20,14 @@
  * @file
  */
 
+use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Session\SessionManager;
-use WrappedString\WrappedString;
-use WrappedString\WrappedStringList;
+use Wikimedia\Rdbms\IResultWrapper;
+use Wikimedia\RelPath;
+use Wikimedia\WrappedString;
+use Wikimedia\WrappedStringList;
 
 /**
  * This class should be covered by a general architecture document which does
@@ -50,12 +53,6 @@ class OutputPage extends ContextSource {
 
 	/** @var bool */
 	protected $mCanonicalUrl = false;
-
-	/**
-	 * @var array Additional stylesheets. Looks like this is for extensions.
-	 *   Might be replaced by ResourceLoader.
-	 */
-	protected $mExtStyles = [];
 
 	/**
 	 * @var string Should be private - has getter and setter. Contains
@@ -159,9 +156,6 @@ class OutputPage extends ContextSource {
 
 	/** @var ResourceLoaderContext */
 	private $rlClientContext;
-
-	/** @var string */
-	private $rlUserModuleState;
 
 	/** @var array */
 	private $rlExemptStyleModules;
@@ -293,11 +287,6 @@ class OutputPage extends ContextSource {
 	private $mEnableTOC = false;
 
 	/**
-	 * @var bool Whether parser output should contain section edit links
-	 */
-	private $mEnableSectionEditLinks = true;
-
-	/**
 	 * @var string|null The URL to send in a <link> element with rel=license
 	 */
 	private $copyrightUrl;
@@ -305,10 +294,21 @@ class OutputPage extends ContextSource {
 	/** @var array Profiling data */
 	private $limitReportJSData = [];
 
+	/** @var array Map Title to Content */
+	private $contentOverrides = [];
+
+	/** @var callable[] */
+	private $contentOverrideCallbacks = [];
+
 	/**
 	 * Link: header contents
 	 */
 	private $mLinkHeader = [];
+
+	/**
+	 * @var string The nonce for Content-Security-Policy
+	 */
+	private $CSPNonce;
 
 	/**
 	 * Constructor for OutputPage. This should not be called directly.
@@ -464,49 +464,22 @@ class OutputPage extends ContextSource {
 	}
 
 	/**
-	 * Register and add a stylesheet from an extension directory.
+	 * Add a JavaScript file to be loaded as `<script>` on this page.
 	 *
-	 * @deprecated since 1.27 use addModuleStyles() or addStyle() instead
-	 * @param string $url Path to sheet.  Provide either a full url (beginning
-	 *             with 'http', etc) or a relative path from the document root
-	 *             (beginning with '/').  Otherwise it behaves identically to
-	 *             addStyle() and draws from the /skins folder.
-	 */
-	public function addExtensionStyle( $url ) {
-		wfDeprecated( __METHOD__, '1.27' );
-		array_push( $this->mExtStyles, $url );
-	}
-
-	/**
-	 * Get all styles added by extensions
-	 *
-	 * @deprecated since 1.27
-	 * @return array
-	 */
-	function getExtStyle() {
-		wfDeprecated( __METHOD__, '1.27' );
-		return $this->mExtStyles;
-	}
-
-	/**
-	 * Add a JavaScript file out of skins/common, or a given relative path.
 	 * Internal use only. Use OutputPage::addModules() if possible.
 	 *
-	 * @param string $file Filename in skins/common or complete on-server path
-	 *              (/foo/bar.js)
-	 * @param string $version Style version of the file. Defaults to $wgStyleVersion
+	 * @param string $file URL to file (absolute path, protocol-relative, or full url)
+	 * @param string|null $unused Previously used to change the cache-busting query parameter
 	 */
-	public function addScriptFile( $file, $version = null ) {
-		// See if $file parameter is an absolute URL or begins with a slash
-		if ( substr( $file, 0, 1 ) == '/' || preg_match( '#^[a-z]*://#i', $file ) ) {
-			$path = $file;
-		} else {
-			$path = $this->getConfig()->get( 'StylePath' ) . "/common/{$file}";
+	public function addScriptFile( $file, $unused = null ) {
+		if ( substr( $file, 0, 1 ) !== '/' && !preg_match( '#^[a-z]*://#i', $file ) ) {
+			// This is not an absolute path, protocol-relative url, or full scheme url,
+			// presumed to be an old call intended to include a file from /w/skins/common,
+			// which doesn't exist anymore as of MediaWiki 1.24 per T71277. Ignore.
+			wfDeprecated( __METHOD__, '1.24' );
+			return;
 		}
-		if ( is_null( $version ) ) {
-			$version = $this->getConfig()->get( 'StyleVersion' );
-		}
-		$this->addScript( Html::linkedScript( wfAppendQuery( $path, $version ) ) );
+		$this->addScript( Html::linkedScript( $file, $this->getCSPNonce() ) );
 	}
 
 	/**
@@ -516,14 +489,14 @@ class OutputPage extends ContextSource {
 	 * @param string $script JavaScript text, no script tags
 	 */
 	public function addInlineScript( $script ) {
-		$this->mScripts .= Html::inlineScript( $script );
+		$this->mScripts .= Html::inlineScript( "\n$script\n", $this->getCSPNonce() ) . "\n";
 	}
 
 	/**
 	 * Filter an array of modules to remove insufficiently trustworthy members, and modules
 	 * which are no longer registered (eg a page is cached before an extension is disabled)
 	 * @param array $modules
-	 * @param string|null $position If not null, only return modules with this position
+	 * @param string|null $position Unused
 	 * @param string $type
 	 * @return array
 	 */
@@ -536,7 +509,6 @@ class OutputPage extends ContextSource {
 			$module = $resourceLoader->getModule( $val );
 			if ( $module instanceof ResourceLoaderModule
 				&& $module->getOrigin() <= $this->getAllowedModules( $type )
-				&& ( is_null( $position ) || $module->getPosition() == $position )
 			) {
 				if ( $this->mTarget && !in_array( $this->mTarget, $module->getTargets() ) ) {
 					$this->warnModuleTargetFilter( $module->getName() );
@@ -567,7 +539,7 @@ class OutputPage extends ContextSource {
 	 * Get the list of modules to include on this page
 	 *
 	 * @param bool $filter Whether to filter out insufficiently trustworthy modules
-	 * @param string|null $position If not null, only return modules with this position
+	 * @param string|null $position Unused
 	 * @param string $param
 	 * @param string $type
 	 * @return array Array of module names
@@ -577,14 +549,12 @@ class OutputPage extends ContextSource {
 	) {
 		$modules = array_values( array_unique( $this->$param ) );
 		return $filter
-			? $this->filterModules( $modules, $position, $type )
+			? $this->filterModules( $modules, null, $type )
 			: $modules;
 	}
 
 	/**
-	 * Add one or more modules recognized by ResourceLoader. Modules added
-	 * through this function will be loaded by ResourceLoader when the
-	 * page loads.
+	 * Load one or more ResourceLoader modules on this page.
 	 *
 	 * @param string|array $modules Module name (string) or array of module names
 	 */
@@ -593,23 +563,26 @@ class OutputPage extends ContextSource {
 	}
 
 	/**
-	 * Get the list of module JS to include on this page
+	 * Get the list of script-only modules to load on this page.
 	 *
 	 * @param bool $filter
-	 * @param string|null $position
+	 * @param string|null $position Unused
 	 * @return array Array of module names
 	 */
 	public function getModuleScripts( $filter = false, $position = null ) {
-		return $this->getModules( $filter, $position, 'mModuleScripts',
+		return $this->getModules( $filter, null, 'mModuleScripts',
 			ResourceLoaderModule::TYPE_SCRIPTS
 		);
 	}
 
 	/**
-	 * Add only JS of one or more modules recognized by ResourceLoader. Module
-	 * scripts added through this function will be loaded by ResourceLoader when
-	 * the page loads.
+	 * Load the scripts of one or more ResourceLoader modules, on this page.
 	 *
+	 * This method exists purely to provide the legacy behaviour of loading
+	 * a module's scripts in the global scope, and without dependency resolution.
+	 * See <https://phabricator.wikimedia.org/T188689>.
+	 *
+	 * @deprecated since 1.31 Use addModules() instead.
 	 * @param string|array $modules Module name (string) or array of module names
 	 */
 	public function addModuleScripts( $modules ) {
@@ -617,24 +590,24 @@ class OutputPage extends ContextSource {
 	}
 
 	/**
-	 * Get the list of module CSS to include on this page
+	 * Get the list of style-only modules to load on this page.
 	 *
 	 * @param bool $filter
-	 * @param string|null $position
+	 * @param string|null $position Unused
 	 * @return array Array of module names
 	 */
 	public function getModuleStyles( $filter = false, $position = null ) {
-		return $this->getModules( $filter, $position, 'mModuleStyles',
+		return $this->getModules( $filter, null, 'mModuleStyles',
 			ResourceLoaderModule::TYPE_STYLES
 		);
 	}
 
 	/**
-	 * Add only CSS of one or more modules recognized by ResourceLoader.
+	 * Load the styles of one or more ResourceLoader modules on this page.
 	 *
-	 * Module styles added through this function will be added using standard link CSS
-	 * tags, rather than as a combined Javascript and CSS package. Thus, they will
-	 * load when JavaScript is disabled (unless CSS also happens to be disabled).
+	 * Module styles added through this function will be loaded as a stylesheet,
+	 * using a standard `<link rel=stylesheet>` HTML tag, rather than as a combined
+	 * Javascript and CSS package. Thus, they will even load when JavaScript is disabled.
 	 *
 	 * @param string|array $modules Module name (string) or array of module names
 	 */
@@ -656,6 +629,37 @@ class OutputPage extends ContextSource {
 	 */
 	public function setTarget( $target ) {
 		$this->mTarget = $target;
+	}
+
+	/**
+	 * Add a mapping from a LinkTarget to a Content, for things like page preview.
+	 * @see self::addContentOverrideCallback()
+	 * @since 1.32
+	 * @param LinkTarget $target
+	 * @param Content $content
+	 */
+	public function addContentOverride( LinkTarget $target, Content $content ) {
+		if ( !$this->contentOverrides ) {
+			// Register a callback for $this->contentOverrides on the first call
+			$this->addContentOverrideCallback( function ( LinkTarget $target ) {
+				$key = $target->getNamespace() . ':' . $target->getDBkey();
+				return $this->contentOverrides[$key] ?? null;
+			} );
+		}
+
+		$key = $target->getNamespace() . ':' . $target->getDBkey();
+		$this->contentOverrides[$key] = $content;
+	}
+
+	/**
+	 * Add a callback for mapping from a Title to a Content object, for things
+	 * like page preview.
+	 * @see ResourceLoaderContext::getContentOverrideCallback()
+	 * @since 1.32
+	 * @param callable $callback
+	 */
+	public function addContentOverrideCallback( callable $callback ) {
+		$this->contentOverrideCallbacks[] = $callback;
 	}
 
 	/**
@@ -714,13 +718,6 @@ class OutputPage extends ContextSource {
 	}
 
 	/**
-	 * @deprecated since 1.28 Obsolete - wgUseETag experiment was removed.
-	 * @param string $tag
-	 */
-	public function setETag( $tag ) {
-	}
-
-	/**
 	 * Set whether the output should only contain the body of the article,
 	 * without any skin, sidebar, etc.
 	 * Used e.g. when calling with "action=render".
@@ -759,11 +756,7 @@ class OutputPage extends ContextSource {
 	 * @return mixed Property value or null if not found
 	 */
 	public function getProperty( $name ) {
-		if ( isset( $this->mProperties[$name] ) ) {
-			return $this->mProperties[$name];
-		} else {
-			return null;
-		}
+		return $this->mProperties[$name] ?? null;
 	}
 
 	/**
@@ -795,8 +788,10 @@ class OutputPage extends ContextSource {
 			'epoch' => $config->get( 'CacheEpoch' )
 		];
 		if ( $config->get( 'UseSquid' ) ) {
-			// T46570: the core page itself may not change, but resources might
-			$modifiedTimes['sepoch'] = wfTimestamp( TS_MW, time() - $config->get( 'SquidMaxage' ) );
+			$modifiedTimes['sepoch'] = wfTimestamp( TS_MW, $this->getCdnCacheEpoch(
+				time(),
+				$config->get( 'SquidMaxage' )
+			) );
 		}
 		Hooks::run( 'OutputPageCheckLastModified', [ &$modifiedTimes, $this ] );
 
@@ -814,9 +809,9 @@ class OutputPage extends ContextSource {
 		# this breaks strtotime().
 		$clientHeader = preg_replace( '/;.*$/', '', $clientHeader );
 
-		MediaWiki\suppressWarnings(); // E_STRICT system time bitching
+		Wikimedia\suppressWarnings(); // E_STRICT system time bitching
 		$clientHeaderTime = strtotime( $clientHeader );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 		if ( !$clientHeaderTime ) {
 			wfDebug( __METHOD__
 				. ": unable to parse the client's If-Modified-Since header: $clientHeader\n" );
@@ -856,6 +851,19 @@ class OutputPage extends ContextSource {
 		wfClearOutputBuffers();
 
 		return true;
+	}
+
+	/**
+	 * @param int $reqTime Time of request (eg. now)
+	 * @param int $maxAge Cache TTL in seconds
+	 * @return int Timestamp
+	 */
+	private function getCdnCacheEpoch( $reqTime, $maxAge ) {
+		// Ensure Last-Modified is never more than (wgSquidMaxage) in the past,
+		// because even if the wiki page content hasn't changed since, static
+		// resources may have changed (skin HTML, interface messages, urls, etc.)
+		// and must roll-over in a timely manner (T46570)
+		return $reqTime - $maxAge;
 	}
 
 	/**
@@ -1330,7 +1338,7 @@ class OutputPage extends ContextSource {
 
 	/**
 	 * @param array $categories
-	 * @return bool|ResultWrapper
+	 * @return bool|IResultWrapper
 	 */
 	protected function addCategoryLinksToLBAndGetResult( array $categories ) {
 		# Add the links to a LinkBatch
@@ -1357,7 +1365,8 @@ class OutputPage extends ContextSource {
 		);
 
 		# Add the results to the link cache
-		$lb->addResultToCache( LinkCache::singleton(), $res );
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
+		$lb->addResultToCache( $linkCache, $res );
 
 		return $res;
 	}
@@ -1503,9 +1512,7 @@ class OutputPage extends ContextSource {
 		if ( $type == ResourceLoaderModule::TYPE_COMBINED ) {
 			return min( array_values( $this->mAllowedModules ) );
 		} else {
-			return isset( $this->mAllowedModules[$type] )
-				? $this->mAllowedModules[$type]
-				: ResourceLoaderModule::ORIGIN_ALL;
+			return $this->mAllowedModules[$type] ?? ResourceLoaderModule::ORIGIN_ALL;
 		}
 	}
 
@@ -1585,7 +1592,6 @@ class OutputPage extends ContextSource {
 			// Someone is trying to set a bogus pre-$wgUser PO. Check if it has
 			// been changed somehow, and keep it if so.
 			$anonPO = ParserOptions::newFromAnon();
-			$anonPO->setEditSection( false );
 			$anonPO->setAllowUnsafeRawHtml( false );
 			if ( !$options->matches( $anonPO ) ) {
 				wfLogWarning( __METHOD__ . ': Setting a changed bogus ParserOptions: ' . wfGetAllCallers( 5 ) );
@@ -1599,7 +1605,6 @@ class OutputPage extends ContextSource {
 				// ParserOptions for it. And don't cache this ParserOptions
 				// either.
 				$po = ParserOptions::newFromAnon();
-				$po->setEditSection( false );
 				$po->setAllowUnsafeRawHtml( false );
 				$po->isBogus = true;
 				if ( $options !== null ) {
@@ -1609,7 +1614,6 @@ class OutputPage extends ContextSource {
 			}
 
 			$this->mParserOptions = ParserOptions::newFromContext( $this->getContext() );
-			$this->mParserOptions->setEditSection( false );
 			$this->mParserOptions->setAllowUnsafeRawHtml( false );
 		}
 
@@ -1859,7 +1863,7 @@ class OutputPage extends ContextSource {
 		// so that extensions may modify ParserOutput to toggle TOC.
 		// This cannot be moved to addParserOutputText because that is not
 		// called by EditPage for Preview.
-		if ( $parserOutput->getTOCEnabled() && $parserOutput->getTOCHTML() ) {
+		if ( $parserOutput->getTOCHTML() ) {
 			$this->mEnableTOC = true;
 		}
 	}
@@ -1905,17 +1909,6 @@ class OutputPage extends ContextSource {
 	 */
 	function addParserOutput( $parserOutput, $poOptions = [] ) {
 		$this->addParserOutputMetadata( $parserOutput );
-
-		// Touch section edit links only if not previously disabled
-		if ( $parserOutput->getEditSectionTokens() ) {
-			$parserOutput->setEditSectionTokens( $this->mEnableSectionEditLinks );
-		}
-		if ( !$this->mEnableSectionEditLinks
-			&& !array_key_exists( 'enableSectionEditLinks', $poOptions )
-		) {
-			$poOptions['enableSectionEditLinks'] = false;
-		}
-
 		$this->addParserOutputText( $parserOutput, $poOptions );
 	}
 
@@ -1936,7 +1929,7 @@ class OutputPage extends ContextSource {
 	 * @param bool $interface Use interface language ($wgLang instead of
 	 *   $wgContLang) while parsing language sensitive magic words like GRAMMAR and PLURAL.
 	 *   This also disables LanguageConverter.
-	 * @param Language $language Target language object, will override $interface
+	 * @param Language|null $language Target language object, will override $interface
 	 * @throws MWException
 	 * @return string HTML
 	 */
@@ -1985,15 +1978,6 @@ class OutputPage extends ContextSource {
 	public function parseInline( $text, $linestart = true, $interface = false ) {
 		$parsed = $this->parse( $text, $linestart, $interface );
 		return Parser::stripOuterParagraph( $parsed );
-	}
-
-	/**
-	 * @param int $maxage
-	 * @deprecated since 1.27 Use setCdnMaxage() instead
-	 */
-	public function setSquidMaxage( $maxage ) {
-		wfDeprecated( __METHOD__, '1.27' );
-		$this->setCdnMaxage( $maxage );
 	}
 
 	/**
@@ -2346,6 +2330,23 @@ class OutputPage extends ContextSource {
 	}
 
 	/**
+	 * Transfer styles and JavaScript modules from skin.
+	 *
+	 * @param Skin $sk to load modules for
+	 */
+	public function loadSkinModules( $sk ) {
+		foreach ( $sk->getDefaultModules() as $group => $modules ) {
+			if ( $group === 'styles' ) {
+				foreach ( $modules as $key => $moduleMembers ) {
+					$this->addModuleStyles( $moduleMembers );
+				}
+			} else {
+				$this->addModules( $modules );
+			}
+		}
+	}
+
+	/**
 	 * Finally, all the text has been munged and accumulated into
 	 * the object, let's actually output it:
 	 *
@@ -2406,10 +2407,6 @@ class OutputPage extends ContextSource {
 		$response->header( 'Content-type: ' . $config->get( 'MimeType' ) . '; charset=UTF-8' );
 		$response->header( 'Content-language: ' . $wgContLang->getHtmlCode() );
 
-		// Avoid Internet Explorer "compatibility view" in IE 8-10, so that
-		// jQuery etc. can work correctly.
-		$response->header( 'X-UA-Compatible: IE=Edge' );
-
 		if ( !$this->mArticleBodyOnly ) {
 			$sk = $this->getSkin();
 
@@ -2429,18 +2426,18 @@ class OutputPage extends ContextSource {
 			$response->header( "X-Frame-Options: $frameOptions" );
 		}
 
+		ContentSecurityPolicy::sendHeaders( $this );
+
 		if ( $this->mArticleBodyOnly ) {
 			echo $this->mBodytext;
 		} else {
-			// Enable safe mode if requested
+			// Enable safe mode if requested (T152169)
 			if ( $this->getRequest()->getBool( 'safemode' ) ) {
 				$this->disallowUserJs();
 			}
 
 			$sk = $this->getSkin();
-			foreach ( $sk->getDefaultModules() as $group ) {
-				$this->addModules( $group );
-			}
+			$this->loadSkinModules( $sk );
 
 			MWDebug::addModules( $this );
 
@@ -2536,7 +2533,7 @@ class OutputPage extends ContextSource {
 	 * Output a standard permission error page
 	 *
 	 * @param array $errors Error message keys or [key, param...] arrays
-	 * @param string $action Action that was denied or null if unknown
+	 * @param string|null $action Action that was denied or null if unknown
 	 */
 	public function showPermissionsErrorPage( array $errors, $action = null ) {
 		foreach ( $errors as $key => $error ) {
@@ -2626,7 +2623,7 @@ class OutputPage extends ContextSource {
 	 * Format a list of error messages
 	 *
 	 * @param array $errors Array of arrays returned by Title::getUserPermissionsErrors
-	 * @param string $action Action that was denied or null if unknown
+	 * @param string|null $action Action that was denied or null if unknown
 	 * @return string The wikitext error-messages, formatted into a list.
 	 */
 	public function formatPermissionsErrorMessage( array $errors, $action = null ) {
@@ -2646,47 +2643,17 @@ class OutputPage extends ContextSource {
 
 			foreach ( $errors as $error ) {
 				$text .= '<li>';
-				$text .= call_user_func_array( [ $this, 'msg' ], $error )->plain();
+				$text .= $this->msg( ...$error )->plain();
 				$text .= "</li>\n";
 			}
 			$text .= '</ul>';
 		} else {
 			$text .= "<div class=\"permissions-errors\">\n" .
-					call_user_func_array( [ $this, 'msg' ], reset( $errors ) )->plain() .
+					$this->msg( ...reset( $errors ) )->plain() .
 					"\n</div>";
 		}
 
 		return $text;
-	}
-
-	/**
-	 * Display a page stating that the Wiki is in read-only mode.
-	 * Should only be called after wfReadOnly() has returned true.
-	 *
-	 * Historically, this function was used to show the source of the page that the user
-	 * was trying to edit and _also_ permissions error messages. The relevant code was
-	 * moved into EditPage in 1.19 (r102024 / d83c2a431c2a) and removed here in 1.25.
-	 *
-	 * @deprecated since 1.25; throw the exception directly
-	 * @throws ReadOnlyError
-	 */
-	public function readOnlyPage() {
-		if ( func_num_args() > 0 ) {
-			throw new MWException( __METHOD__ . ' no longer accepts arguments since 1.25.' );
-		}
-
-		throw new ReadOnlyError;
-	}
-
-	/**
-	 * Turn off regular page output and return an error response
-	 * for when rate limiting has triggered.
-	 *
-	 * @deprecated since 1.25; throw the exception directly
-	 */
-	public function rateLimited() {
-		wfDeprecated( __METHOD__, '1.25' );
-		throw new ThrottledError;
 	}
 
 	/**
@@ -2710,30 +2677,56 @@ class OutputPage extends ContextSource {
 		}
 	}
 
+	/**
+	 * Output an error page
+	 *
+	 * @note FatalError exception class provides an alternative.
+	 * @param string $message Error to output. Must be escaped for HTML.
+	 */
 	public function showFatalError( $message ) {
 		$this->prepareErrorPage( $this->msg( 'internalerror' ) );
 
 		$this->addHTML( $message );
 	}
 
+	/**
+	 * @deprecated 1.32 Use OutputPage::showFatalError or throw FatalError instead.
+	 */
 	public function showUnexpectedValueError( $name, $val ) {
-		$this->showFatalError( $this->msg( 'unexpected', $name, $val )->text() );
+		wfDeprecated( __METHOD__, '1.32' );
+		$this->showFatalError( $this->msg( 'unexpected', $name, $val )->escaped() );
 	}
 
+	/**
+	 * @deprecated 1.32 Use OutputPage::showFatalError or throw FatalError instead.
+	 */
 	public function showFileCopyError( $old, $new ) {
-		$this->showFatalError( $this->msg( 'filecopyerror', $old, $new )->text() );
+		wfDeprecated( __METHOD__, '1.32' );
+		$this->showFatalError( $this->msg( 'filecopyerror', $old, $new )->escaped() );
 	}
 
+	/**
+	 * @deprecated 1.32 Use OutputPage::showFatalError or throw FatalError instead.
+	 */
 	public function showFileRenameError( $old, $new ) {
-		$this->showFatalError( $this->msg( 'filerenameerror', $old, $new )->text() );
+		wfDeprecated( __METHOD__, '1.32' );
+		$this->showFatalError( $this->msg( 'filerenameerror', $old, $new )->escpaed() );
 	}
 
+	/**
+	 * @deprecated 1.32 Use OutputPage::showFatalError or throw FatalError instead.
+	 */
 	public function showFileDeleteError( $name ) {
-		$this->showFatalError( $this->msg( 'filedeleteerror', $name )->text() );
+		wfDeprecated( __METHOD__, '1.32' );
+		$this->showFatalError( $this->msg( 'filedeleteerror', $name )->escaped() );
 	}
 
+	/**
+	 * @deprecated 1.32 Use OutputPage::showFatalError or throw FatalError instead.
+	 */
 	public function showFileNotFoundError( $name ) {
-		$this->showFatalError( $this->msg( 'filenotfound', $name )->text() );
+		wfDeprecated( __METHOD__, '1.32' );
+		$this->showFatalError( $this->msg( 'filenotfound', $name )->escaped() );
 	}
 
 	/**
@@ -2741,7 +2734,7 @@ class OutputPage extends ContextSource {
 	 *
 	 * @param Title $title Title to link
 	 * @param array $query Query string parameters
-	 * @param string $text Text of the link (input is not escaped)
+	 * @param string|null $text Text of the link (input is not escaped)
 	 * @param array $options Options array to pass to Linker
 	 */
 	public function addReturnTo( $title, array $query = [], $text = null, $options = [] ) {
@@ -2756,9 +2749,9 @@ class OutputPage extends ContextSource {
 	 * Add a "return to" link pointing to a specified title,
 	 * or the title indicated in the request, or else the main page
 	 *
-	 * @param mixed $unused
-	 * @param Title|string $returnto Title or String to return to
-	 * @param string $returntoquery Query string for the return to link
+	 * @param mixed|null $unused
+	 * @param Title|string|null $returnto Title or String to return to
+	 * @param string|null $returntoquery Query string for the return to link
 	 */
 	public function returnToMain( $unused = null, $returnto = null, $returntoquery = null ) {
 		if ( $returnto == null ) {
@@ -2804,6 +2797,18 @@ class OutputPage extends ContextSource {
 				$this->getResourceLoader(),
 				new FauxRequest( $query )
 			);
+			if ( $this->contentOverrideCallbacks ) {
+				$this->rlClientContext = new DerivativeResourceLoaderContext( $this->rlClientContext );
+				$this->rlClientContext->setContentOverrideCallback( function ( Title $title ) {
+					foreach ( $this->contentOverrideCallbacks as $callback ) {
+						$content = call_user_func( $callback, $title );
+						if ( $content !== null ) {
+							return $content;
+						}
+					}
+					return null;
+				} );
+			}
 		}
 		return $this->rlClientContext;
 	}
@@ -2824,6 +2829,7 @@ class OutputPage extends ContextSource {
 			$context = $this->getRlClientContext();
 			$rl = $this->getResourceLoader();
 			$this->addModules( [
+				'user',
 				'user.options',
 				'user.tokens',
 			] );
@@ -2852,11 +2858,6 @@ class OutputPage extends ContextSource {
 				function ( $name ) use ( $rl, $context, &$exemptGroups, &$exemptStates ) {
 					$module = $rl->getModule( $name );
 					if ( $module ) {
-						if ( $name === 'user.styles' && $this->isUserCssPreview() ) {
-							$exemptStates[$name] = 'ready';
-							// Special case in buildExemptModules()
-							return false;
-						}
 						$group = $module->getGroup();
 						if ( isset( $exemptGroups[$group] ) ) {
 							$exemptStates[$name] = 'ready';
@@ -2872,19 +2873,20 @@ class OutputPage extends ContextSource {
 			);
 			$this->rlExemptStyleModules = $exemptGroups;
 
-			$isUserModuleFiltered = !$this->filterModules( [ 'user' ] );
-			// If this page filters out 'user', makeResourceLoaderLink will drop it.
-			// Avoid indefinite "loading" state or untrue "ready" state (T145368).
-			if ( !$isUserModuleFiltered ) {
-				// Manually handled by getBottomScripts()
-				$userModule = $rl->getModule( 'user' );
-				$userState = $userModule->isKnownEmpty( $context ) && !$this->isUserJsPreview()
-					? 'ready'
-					: 'loading';
-				$this->rlUserModuleState = $exemptStates['user'] = $userState;
-			}
-
-			$rlClient = new ResourceLoaderClientHtml( $context, $this->getTarget() );
+			$rlClient = new ResourceLoaderClientHtml( $context, [
+				'target' => $this->getTarget(),
+				'nonce' => $this->getCSPNonce(),
+				// When 'safemode', disallowUserJs(), or reduceAllowedModules() is used
+				// to only restrict modules to ORIGIN_CORE (ie. disallow ORIGIN_USER), the list of
+				// modules enqueud for loading on this page is filtered to just those.
+				// However, to make sure we also apply the restriction to dynamic dependencies and
+				// lazy-loaded modules at run-time on the client-side, pass 'safemode' down to the
+				// StartupModule so that the client-side registry will not contain any restricted
+				// modules either. (T152169, T185303)
+				'safemode' => ( $this->getAllowedModules( ResourceLoaderModule::TYPE_COMBINED )
+					<= ResourceLoaderModule::ORIGIN_CORE_INDIVIDUAL
+				) ? '1' : null,
+			] );
 			$rlClient->setConfig( $this->getJSVars() );
 			$rlClient->setModules( $this->getModules( /*filter*/ true ) );
 			$rlClient->setModuleStyles( $moduleStyles );
@@ -2941,7 +2943,8 @@ class OutputPage extends ContextSource {
 				ResourceLoaderContext::newDummyContext(),
 				[ 'html5shiv' ],
 				ResourceLoaderModule::TYPE_SCRIPTS,
-				[ 'sync' => true ]
+				[ 'sync' => true ],
+				$this->getCSPNonce()
 			) .
 			'<![endif]-->';
 
@@ -3022,7 +3025,8 @@ class OutputPage extends ContextSource {
 			$this->getRlClientContext(),
 			$modules,
 			$only,
-			$extraQuery
+			$extraQuery,
+			$this->getCSPNonce()
 		);
 	}
 
@@ -3038,23 +3042,9 @@ class OutputPage extends ContextSource {
 		return WrappedString::join( "\n", $chunks );
 	}
 
-	private function isUserJsPreview() {
-		return $this->getConfig()->get( 'AllowUserJs' )
-			&& $this->getTitle()
-			&& $this->getTitle()->isJsSubpage()
-			&& $this->userCanPreview();
-	}
-
-	protected function isUserCssPreview() {
-		return $this->getConfig()->get( 'AllowUserCss' )
-			&& $this->getTitle()
-			&& $this->getTitle()->isCssSubpage()
-			&& $this->userCanPreview();
-	}
-
 	/**
-	 * JS stuff to put at the bottom of the `<body>`. These are modules with position 'bottom',
-	 * legacy scripts ($this->mScripts), and user JS.
+	 * JS stuff to put at the bottom of the `<body>`.
+	 * These are legacy scripts ($this->mScripts), and user JS.
 	 *
 	 * @return string|WrappedStringList HTML
 	 */
@@ -3065,45 +3055,12 @@ class OutputPage extends ContextSource {
 		// Legacy non-ResourceLoader scripts
 		$chunks[] = $this->mScripts;
 
-		// Exempt 'user' module
-		// - May need excludepages for live preview. (T28283)
-		// - Must use TYPE_COMBINED so its response is handled by mw.loader.implement() which
-		//   ensures execution is scheduled after the "site" module.
-		// - Don't load if module state is already resolved as "ready".
-		if ( $this->rlUserModuleState === 'loading' ) {
-			if ( $this->isUserJsPreview() ) {
-				$chunks[] = $this->makeResourceLoaderLink( 'user', ResourceLoaderModule::TYPE_COMBINED,
-					[ 'excludepage' => $this->getTitle()->getPrefixedDBkey() ]
-				);
-				$chunks[] = ResourceLoader::makeInlineScript(
-					Xml::encodeJsCall( 'mw.loader.using', [
-						[ 'user', 'site' ],
-						new XmlJsCode(
-							'function () {'
-								. Xml::encodeJsCall( '$.globalEval', [
-									$this->getRequest()->getText( 'wpTextbox1' )
-								] )
-								. '}'
-						)
-					] )
-				);
-				// FIXME: If the user is previewing, say, ./vector.js, his ./common.js will be loaded
-				// asynchronously and may arrive *after* the inline script here. So the previewed code
-				// may execute before ./common.js runs. Normally, ./common.js runs before ./vector.js.
-				// Similarly, when previewing ./common.js and the user module does arrive first,
-				// it will arrive without common.js and the inline script runs after.
-				// Thus running common after the excluded subpage.
-			} else {
-				// Load normally
-				$chunks[] = $this->makeResourceLoaderLink( 'user', ResourceLoaderModule::TYPE_COMBINED );
-			}
-		}
-
 		if ( $this->limitReportJSData ) {
 			$chunks[] = ResourceLoader::makeInlineScript(
 				ResourceLoader::makeConfigSetScript(
 					[ 'wgPageParseReport' => $this->limitReportJSData ]
-				)
+				),
+				$this->getCSPNonce()
 			);
 		}
 
@@ -3124,7 +3081,7 @@ class OutputPage extends ContextSource {
 	 * Add one or more variables to be set in mw.config in JavaScript
 	 *
 	 * @param string|array $keys Key or array of key/value pairs
-	 * @param mixed $value [optional] Value of the configuration variable
+	 * @param mixed|null $value [optional] Value of the configuration variable
 	 */
 	public function addJsConfigVars( $keys, $value = null ) {
 		if ( is_array( $keys ) ) {
@@ -3178,13 +3135,13 @@ class OutputPage extends ContextSource {
 
 		// Pre-process information
 		$separatorTransTable = $lang->separatorTransformTable();
-		$separatorTransTable = $separatorTransTable ? $separatorTransTable : [];
+		$separatorTransTable = $separatorTransTable ?: [];
 		$compactSeparatorTransTable = [
 			implode( "\t", array_keys( $separatorTransTable ) ),
 			implode( "\t", $separatorTransTable ),
 		];
 		$digitTransTable = $lang->digitTransformTable();
-		$digitTransTable = $digitTransTable ? $digitTransTable : [];
+		$digitTransTable = $digitTransTable ?: [];
 		$compactDigitTransTable = [
 			implode( "\t", array_keys( $digitTransTable ) ),
 			implode( "\t", $digitTransTable ),
@@ -3272,7 +3229,7 @@ class OutputPage extends ContextSource {
 
 	/**
 	 * To make it harder for someone to slip a user a fake
-	 * user-JavaScript or user-CSS preview, a random token
+	 * JavaScript or CSS preview, a random token
 	 * is associated with the login session. If it's not
 	 * passed back with the preview request, we won't render
 	 * the code.
@@ -3283,7 +3240,6 @@ class OutputPage extends ContextSource {
 		$request = $this->getRequest();
 		if (
 			$request->getVal( 'action' ) !== 'submit' ||
-			!$request->getCheck( 'wpPreview' ) ||
 			!$request->wasPosted()
 		) {
 			return false;
@@ -3300,14 +3256,6 @@ class OutputPage extends ContextSource {
 		}
 
 		$title = $this->getTitle();
-		if ( !$title->isJsSubpage() && !$title->isCssSubpage() ) {
-			return false;
-		}
-		if ( !$title->isSubpageOf( $user->getUserPage() ) ) {
-			// Don't execute another user's CSS or JS on preview (T85855)
-			return false;
-		}
-
 		$errors = $title->getUserPermissionsErrors( 'edit', $user );
 		if ( count( $errors ) !== 0 ) {
 			return false;
@@ -3428,24 +3376,22 @@ class OutputPage extends ContextSource {
 			'title' => $this->msg( 'opensearch-desc' )->inContentLanguage()->text(),
 		] );
 
-		if ( $config->get( 'EnableAPI' ) ) {
-			# Real Simple Discovery link, provides auto-discovery information
-			# for the MediaWiki API (and potentially additional custom API
-			# support such as WordPress or Twitter-compatible APIs for a
-			# blogging extension, etc)
-			$tags['rsd'] = Html::element( 'link', [
-				'rel' => 'EditURI',
-				'type' => 'application/rsd+xml',
-				// Output a protocol-relative URL here if $wgServer is protocol-relative.
-				// Whether RSD accepts relative or protocol-relative URLs is completely
-				// undocumented, though.
-				'href' => wfExpandUrl( wfAppendQuery(
-					wfScript( 'api' ),
-					[ 'action' => 'rsd' ] ),
-					PROTO_RELATIVE
-				),
-			] );
-		}
+		# Real Simple Discovery link, provides auto-discovery information
+		# for the MediaWiki API (and potentially additional custom API
+		# support such as WordPress or Twitter-compatible APIs for a
+		# blogging extension, etc)
+		$tags['rsd'] = Html::element( 'link', [
+			'rel' => 'EditURI',
+			'type' => 'application/rsd+xml',
+			// Output a protocol-relative URL here if $wgServer is protocol-relative.
+			// Whether RSD accepts relative or protocol-relative URLs is completely
+			// undocumented, though.
+			'href' => wfExpandUrl( wfAppendQuery(
+				wfScript( 'api' ),
+				[ 'action' => 'rsd' ] ),
+				PROTO_RELATIVE
+			),
+		] );
 
 		# Language variants
 		if ( !$config->get( 'DisableLangConversion' ) ) {
@@ -3648,28 +3594,9 @@ class OutputPage extends ContextSource {
 	 * @return string|WrappedStringList HTML
 	 */
 	protected function buildExemptModules() {
-		global $wgContLang;
-
 		$chunks = [];
 		// Things that go after the ResourceLoaderDynamicStyles marker
 		$append = [];
-
-		// Exempt 'user' styles module (may need 'excludepages' for live preview)
-		if ( $this->isUserCssPreview() ) {
-			$append[] = $this->makeResourceLoaderLink(
-				'user.styles',
-				ResourceLoaderModule::TYPE_STYLES,
-				[ 'excludepage' => $this->getTitle()->getPrefixedDBkey() ]
-			);
-
-			// Load the previewed CSS. Janus it if needed.
-			// User-supplied CSS is assumed to in the wiki's content language.
-			$previewedCSS = $this->getRequest()->getText( 'wpTextbox1' );
-			if ( $this->getLanguage()->getDir() !== $wgContLang->getDir() ) {
-				$previewedCSS = CSSJanus::transform( $previewedCSS, true, false );
-			}
-			$append[] = Html::inlineStyle( $previewedCSS );
-		}
 
 		// We want site, private and user styles to override dynamically added styles from
 		// general modules, but we want dynamically added styles to override statically added
@@ -3713,12 +3640,6 @@ class OutputPage extends ContextSource {
 	public function buildCssLinksArray() {
 		$links = [];
 
-		// Add any extension CSS
-		foreach ( $this->mExtStyles as $url ) {
-			$this->addStyle( $url );
-		}
-		$this->mExtStyles = [];
-
 		foreach ( $this->styles as $file => $options ) {
 			$link = $this->styleLink( $file, $options );
 			if ( $link ) {
@@ -3757,8 +3678,11 @@ class OutputPage extends ContextSource {
 			$url = $style;
 		} else {
 			$config = $this->getConfig();
-			$url = $config->get( 'StylePath' ) . '/' . $style . '?' .
-				$config->get( 'StyleVersion' );
+			// Append file hash as query parameter
+			$url = self::transformResourcePath(
+				$config,
+				$config->get( 'StylePath' ) . '/' . $style
+			);
 		}
 
 		$link = Html::linkedStyle( $url, $media );
@@ -3818,7 +3742,7 @@ class OutputPage extends ContextSource {
 			$remotePathPrefix = $remotePath = $uploadPath;
 		}
 
-		$path = RelPath\getRelativePath( $path, $remotePath );
+		$path = RelPath::getRelativePath( $path, $remotePath );
 		return self::transformFilePath( $remotePathPrefix, $localDir, $path );
 	}
 
@@ -3978,7 +3902,7 @@ class OutputPage extends ContextSource {
 	 * @deprecated since 1.31, use $poOptions to addParserOutput() instead.
 	 */
 	public function enableSectionEditLinks( $flag = true ) {
-		$this->mEnableSectionEditLinks = $flag;
+		wfDeprecated( __METHOD__, '1.31' );
 	}
 
 	/**
@@ -3987,7 +3911,8 @@ class OutputPage extends ContextSource {
 	 * @deprecated since 1.31, use $poOptions to addParserOutput() instead.
 	 */
 	public function sectionEditLinksEnabled() {
-		return $this->mEnableSectionEditLinks;
+		wfDeprecated( __METHOD__, '1.31' );
+		return true;
 	}
 
 	/**
@@ -3999,7 +3924,7 @@ class OutputPage extends ContextSource {
 	 */
 	public static function setupOOUI( $skinName = 'default', $dir = 'ltr' ) {
 		$themes = ResourceLoaderOOUIModule::getSkinThemeMap();
-		$theme = isset( $themes[$skinName] ) ? $themes[$skinName] : $themes['default'];
+		$theme = $themes[$skinName] ?? $themes['default'];
 		// For example, 'OOUI\WikimediaUITheme'.
 		$themeClass = "OOUI\\{$theme}Theme";
 		OOUI\Theme::setSingleton( new $themeClass() );
@@ -4063,12 +3988,8 @@ class OutputPage extends ContextSource {
 		uksort( $logosPerDppx, function ( $a , $b ) {
 			$a = floatval( $a );
 			$b = floatval( $b );
-
-			if ( $a == $b ) {
-				return 0;
-			}
 			// Sort from smallest to largest (e.g. 1x, 1.5x, 2x)
-			return ( $a < $b ) ? -1 : 1;
+			return $a <=> $b;
 		} );
 
 		foreach ( $logosPerDppx as $dppx => $src ) {
@@ -4104,5 +4025,27 @@ class OutputPage extends ContextSource {
 				'<' . $logos[$i]['src'] . '>;rel=preload;as=image;media=' . $media_query
 			);
 		}
+	}
+
+	/**
+	 * Get (and set if not yet set) the CSP nonce.
+	 *
+	 * This value needs to be included in any <script> tags on the
+	 * page.
+	 *
+	 * @return string|bool Nonce or false to mean don't output nonce
+	 * @since 1.32
+	 */
+	public function getCSPNonce() {
+		if ( !ContentSecurityPolicy::isNonceRequired( $this->getConfig() ) ) {
+			return false;
+		}
+		if ( $this->CSPNonce === null ) {
+			// XXX It might be expensive to generate randomness
+			// on every request, on Windows.
+			$rand = random_bytes( 15 );
+			$this->CSPNonce = base64_encode( $rand );
+		}
+		return $this->CSPNonce;
 	}
 }

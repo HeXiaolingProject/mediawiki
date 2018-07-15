@@ -70,7 +70,7 @@ abstract class ContentHandler {
 	 *
 	 * @since 1.21
 	 *
-	 * @param Content $content
+	 * @param Content|null $content
 	 *
 	 * @throws MWException If the content is not an instance of TextContent and
 	 * wgContentHandlerTextFallback was set to 'fail'.
@@ -115,11 +115,11 @@ abstract class ContentHandler {
 	 *
 	 * @param string $text The textual representation, will be
 	 *    unserialized to create the Content object
-	 * @param Title $title The title of the page this text belongs to.
+	 * @param Title|null $title The title of the page this text belongs to.
 	 *    Required if $modelId is not provided.
-	 * @param string $modelId The model to deserialize to. If not provided,
+	 * @param string|null $modelId The model to deserialize to. If not provided,
 	 *    $title->getContentModel() is used.
-	 * @param string $format The format to use for deserialization. If not
+	 * @param string|null $format The format to use for deserialization. If not
 	 *    given, the model's default format is used.
 	 *
 	 * @throws MWException If model ID or format is not supported or if the text can not be
@@ -333,6 +333,13 @@ abstract class ContentHandler {
 	}
 
 	/**
+	 * Clean up handlers cache.
+	 */
+	public static function cleanupHandlersCache() {
+		self::$handlers = [];
+	}
+
+	/**
 	 * Returns the localized name for a given content model.
 	 *
 	 * Model names are localized using system messages. Message keys
@@ -413,7 +420,7 @@ abstract class ContentHandler {
 	 * @since 1.21
 	 *
 	 * @param Content $content The Content object to serialize
-	 * @param string $format The desired serialization format
+	 * @param string|null $format The desired serialization format
 	 *
 	 * @return string Serialized form of the content
 	 */
@@ -439,7 +446,7 @@ abstract class ContentHandler {
 	 * @since 1.21
 	 *
 	 * @param string $blob Serialized form of the content
-	 * @param string $format The format used for serialization
+	 * @param string|null $format The format used for serialization
 	 *
 	 * @return Content The Content object created by deserializing $blob
 	 */
@@ -647,7 +654,7 @@ abstract class ContentHandler {
 	 * @since 1.21
 	 *
 	 * @param Title $title The page to determine the language for.
-	 * @param Content $content The page's content, if you have it handy, to avoid reloading it.
+	 * @param Content|null $content The page's content, if you have it handy, to avoid reloading it.
 	 *
 	 * @return Language The page's language
 	 */
@@ -682,7 +689,7 @@ abstract class ContentHandler {
 	 * @since 1.21
 	 *
 	 * @param Title $title The page to determine the language for.
-	 * @param Content $content The page's content, if you have it handy, to avoid reloading it.
+	 * @param Content|null $content The page's content, if you have it handy, to avoid reloading it.
 	 *
 	 * @return Language The page's language for viewing
 	 */
@@ -986,13 +993,17 @@ abstract class ContentHandler {
 
 		// Find out if there was only one contributor
 		// Only scan the last 20 revisions
-		$res = $dbr->select( 'revision', 'rev_user_text',
+		$revQuery = Revision::getQueryInfo();
+		$res = $dbr->select(
+			$revQuery['tables'],
+			[ 'rev_user_text' => $revQuery['fields']['rev_user_text'] ],
 			[
 				'rev_page' => $title->getArticleID(),
 				$dbr->bitAnd( 'rev_deleted', Revision::DELETED_USER ) . ' = 0'
 			],
 			__METHOD__,
-			[ 'LIMIT' => 20 ]
+			[ 'LIMIT' => 20 ],
+			$revQuery['joins']
 		);
 
 		if ( $res === false ) {
@@ -1058,7 +1069,7 @@ abstract class ContentHandler {
 	 * @param Revision $undo The revision to undo
 	 * @param Revision $undoafter Must be an earlier revision than $undo
 	 *
-	 * @return mixed String on success, false on failure
+	 * @return mixed Content on success, false on failure
 	 */
 	public function getUndoContent( Revision $current, Revision $undo, Revision $undoafter ) {
 		$cur_content = $current->getContent();
@@ -1103,6 +1114,8 @@ abstract class ContentHandler {
 	/**
 	 * Get parser options suitable for rendering and caching the article
 	 *
+	 * @deprecated since 1.32, use WikiPage::makeParserOptions() or
+	 *  ParserOptions::newCanonical() instead.
 	 * @param IContextSource|User|string $context One of the following:
 	 *        - IContextSource: Use the User and the Language of the provided
 	 *                                            context
@@ -1115,22 +1128,8 @@ abstract class ContentHandler {
 	 * @return ParserOptions
 	 */
 	public function makeParserOptions( $context ) {
-		global $wgContLang;
-
-		if ( $context instanceof IContextSource ) {
-			$user = $context->getUser();
-			$lang = $context->getLanguage();
-		} elseif ( $context instanceof User ) { // settings per user (even anons)
-			$user = $context;
-			$lang = null;
-		} elseif ( $context === 'canonical' ) { // canonical settings
-			$user = new User;
-			$lang = $wgContLang;
-		} else {
-			throw new MWException( "Bad context for parser options: $context" );
-		}
-
-		return ParserOptions::newCanonical( $user, $lang );
+		wfDeprecated( __METHOD__, '1.32' );
+		return ParserOptions::newCanonical( $context );
 	}
 
 	/**
@@ -1299,7 +1298,7 @@ abstract class ContentHandler {
 	 * Specific content handlers may override it if they need different content handling.
 	 *
 	 * @param WikiPage $page
-	 * @param ParserCache $cache
+	 * @param ParserCache|null $cache
 	 * @return ParserOutput
 	 */
 	public function getParserOutputForIndexing( WikiPage $page, ParserCache $cache = null ) {

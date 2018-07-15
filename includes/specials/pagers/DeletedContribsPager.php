@@ -23,7 +23,8 @@
  * @ingroup Pager
  */
 use MediaWiki\MediaWikiServices;
-use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IResultWrapper;
 use Wikimedia\Rdbms\FakeResultWrapper;
 
 class DeletedContribsPager extends IndexPager {
@@ -58,7 +59,12 @@ class DeletedContribsPager extends IndexPager {
 	}
 
 	function getQueryInfo() {
-		list( $index, $userCond ) = $this->getUserCond();
+		$userCond = [
+			// ->getJoin() below takes care of any joins needed
+			ActorMigration::newMigration()->getWhere(
+				wfGetDB( DB_REPLICA ), 'ar_user', User::newFromName( $this->target, false ), false
+			)['conds']
+		];
 		$conds = array_merge( $userCond, $this->getNamespaceCond() );
 		$user = $this->getUser();
 		// Paranoia: avoid brute force searches (T19792)
@@ -69,17 +75,18 @@ class DeletedContribsPager extends IndexPager {
 				' != ' . Revision::SUPPRESSED_USER;
 		}
 
-		$commentQuery = CommentStore::newKey( 'ar_comment' )->getJoin();
+		$commentQuery = CommentStore::getStore()->getJoin( 'ar_comment' );
+		$actorQuery = ActorMigration::newMigration()->getJoin( 'ar_user' );
 
 		return [
-			'tables' => [ 'archive' ] + $commentQuery['tables'],
+			'tables' => [ 'archive' ] + $commentQuery['tables'] + $actorQuery['tables'],
 			'fields' => [
 				'ar_rev_id', 'ar_namespace', 'ar_title', 'ar_timestamp',
-				'ar_minor_edit', 'ar_user', 'ar_user_text', 'ar_deleted'
-			] + $commentQuery['fields'],
+				'ar_minor_edit', 'ar_deleted'
+			] + $commentQuery['fields'] + $actorQuery['fields'],
 			'conds' => $conds,
-			'options' => [ 'USE INDEX' => [ 'archive' => $index ] ],
-			'join_conds' => $commentQuery['joins'],
+			'options' => [],
+			'join_conds' => $commentQuery['joins'] + $actorQuery['joins'],
 		];
 	}
 
@@ -90,7 +97,7 @@ class DeletedContribsPager extends IndexPager {
 	 * @param string $offset Index offset, inclusive
 	 * @param int $limit Exact query limit
 	 * @param bool $descending Query direction, false for ascending, true for descending
-	 * @return ResultWrapper
+	 * @return IResultWrapper
 	 */
 	function reallyDoQuery( $offset, $limit, $descending ) {
 		$data = [ parent::reallyDoQuery( $offset, $limit, $descending ) ];
@@ -126,15 +133,6 @@ class DeletedContribsPager extends IndexPager {
 		$result = array_values( $result );
 
 		return new FakeResultWrapper( $result );
-	}
-
-	function getUserCond() {
-		$condition = [];
-
-		$condition['ar_user_text'] = $this->target;
-		$index = 'ar_usertext_timestamp';
-
-		return [ $index, $condition ];
 	}
 
 	function getIndexField() {
@@ -207,14 +205,14 @@ class DeletedContribsPager extends IndexPager {
 		 * we're definitely dealing with revision data and we may proceed, if not, we'll leave it
 		 * to extensions to subscribe to the hook to parse the row.
 		 */
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		try {
 			$rev = Revision::newFromArchiveRow( $row );
 			$validRevision = (bool)$rev->getId();
 		} catch ( Exception $e ) {
 			$validRevision = false;
 		}
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		if ( $validRevision ) {
 			$attribs['data-mw-revid'] = $rev->getId();
@@ -256,9 +254,10 @@ class DeletedContribsPager extends IndexPager {
 		$rev = new Revision( [
 			'title' => $page,
 			'id' => $row->ar_rev_id,
-			'comment' => CommentStore::newKey( 'ar_comment' )->getComment( $row )->text,
+			'comment' => CommentStore::getStore()->getComment( 'ar_comment', $row )->text,
 			'user' => $row->ar_user,
 			'user_text' => $row->ar_user_text,
+			'actor' => $row->ar_actor ?? null,
 			'timestamp' => $row->ar_timestamp,
 			'minor_edit' => $row->ar_minor_edit,
 			'deleted' => $row->ar_deleted,

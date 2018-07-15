@@ -148,7 +148,7 @@ class FileDeleteForm {
 	 * @param string &$oldimage Archive name
 	 * @param string $reason Reason of the deletion
 	 * @param bool $suppress Whether to mark all deleted versions as restricted
-	 * @param User $user User object performing the request
+	 * @param User|null $user User object performing the request
 	 * @param array $tags Tags to apply to the deletion action
 	 * @throws MWException
 	 * @return Status
@@ -212,7 +212,7 @@ class FileDeleteForm {
 						$logEntry->setTags( $tags );
 						$logid = $logEntry->insert();
 						$dbw->onTransactionPreCommitOrIdle(
-							function () use ( $dbw, $logEntry, $logid ) {
+							function () use ( $logEntry, $logid ) {
 								$logEntry->publish( $logid );
 							},
 							__METHOD__
@@ -246,6 +246,9 @@ class FileDeleteForm {
 	private function showForm() {
 		global $wgOut, $wgUser, $wgRequest;
 
+		$conf = RequestContext::getMain()->getConfig();
+		$oldCommentSchema = $conf->get( 'CommentTableSchemaMigrationStage' ) === MIGRATION_OLD;
+
 		if ( $wgUser->isAllowed( 'suppressrevision' ) ) {
 			$suppress = "<tr id=\"wpDeleteSuppressRow\">
 					<td></td>
@@ -257,6 +260,8 @@ class FileDeleteForm {
 		} else {
 			$suppress = '';
 		}
+
+		$wgOut->addModules( 'mediawiki.action.delete.file' );
 
 		$checkWatch = $wgUser->getBoolOption( 'watchdeletion' ) || $wgUser->isWatched( $this->title );
 		$form = Xml::openElement( 'form', [ 'method' => 'post', 'action' => $this->getAction(),
@@ -286,8 +291,15 @@ class FileDeleteForm {
 					Xml::label( wfMessage( 'filedelete-otherreason' )->text(), 'wpReason' ) .
 				"</td>
 				<td class='mw-input'>" .
-					Xml::input( 'wpReason', 60, $wgRequest->getText( 'wpReason' ),
-						[ 'type' => 'text', 'maxlength' => '255', 'tabindex' => '2', 'id' => 'wpReason' ] ) .
+					Xml::input( 'wpReason', 60, $wgRequest->getText( 'wpReason' ), [
+						'type' => 'text',
+						// HTML maxlength uses "UTF-16 code units", which means that characters outside BMP
+						// (e.g. emojis) count for two each. This limit is overridden in JS to instead count
+						// Unicode codepoints (or 255 UTF-8 bytes for old schema).
+						'maxlength' => $oldCommentSchema ? 255 : CommentStore::COMMENT_CHARACTER_LIMIT,
+						'tabindex' => '2',
+						'id' => 'wpReason'
+					] ) .
 				"</td>
 			</tr>
 			{$suppress}";

@@ -20,6 +20,8 @@
  * @file
  * @ingroup Parser
  */
+
+use MediaWiki\MediaWikiServices;
 use Wikimedia\ScopedCallback;
 
 /**
@@ -38,6 +40,13 @@ use Wikimedia\ScopedCallback;
  * @ingroup Parser
  */
 class ParserOptions {
+
+	/**
+	 * Flag indicating that newCanonical() accepts an IContextSource or the string 'canonical', for
+	 * back-compat checks from extensions.
+	 * @since 1.32
+	 */
+	const HAS_NEWCANONICAL_FROM_CONTEXT = 1;
 
 	/**
 	 * Default values for all options that are relevant for caching.
@@ -65,7 +74,6 @@ class ParserOptions {
 		'stubthreshold' => true,
 		'printable' => true,
 		'userlang' => true,
-		'wrapclass' => true,
 	];
 
 	/**
@@ -80,13 +88,6 @@ class ParserOptions {
 	 * @note Caching based on parse time is handled externally
 	 */
 	private $mTimestamp;
-
-	/**
-	 * The edit section flag is in ParserOptions for historical reasons, but
-	 * doesn't actually affect the parser output since Feb 2015.
-	 * @var bool
-	 */
-	private $mEditSection = true;
 
 	/**
 	 * Stored user object
@@ -780,12 +781,16 @@ class ParserOptions {
 	/**
 	 * CSS class to use to wrap output from Parser::parse()
 	 * @since 1.30
-	 * @param string|bool $className Set false to disable wrapping.
+	 * @param string $className Class name to use for wrapping.
+	 *   Passing false to indicate "no wrapping" was deprecated in MediaWiki 1.31.
 	 * @return string|bool Current value
 	 */
 	public function setWrapOutputClass( $className ) {
 		if ( $className === true ) { // DWIM, they probably want the default class name
 			$className = 'mw-parser-output';
+		}
+		if ( $className === false ) {
+			wfDeprecated( __METHOD__ . '( false )', '1.31' );
 		}
 		return $this->setOption( 'wrapclass', $className );
 	}
@@ -873,7 +878,8 @@ class ParserOptions {
 	 * @return bool
 	 */
 	public function getEditSection() {
-		return $this->mEditSection;
+		wfDeprecated( __METHOD__, '1.31' );
+		return true;
 	}
 
 	/**
@@ -883,7 +889,8 @@ class ParserOptions {
 	 * @return bool Old value
 	 */
 	public function setEditSection( $x ) {
-		return wfSetVar( $this->mEditSection, $x );
+		wfDeprecated( __METHOD__, '1.31' );
+		return true;
 	}
 
 	/**
@@ -930,10 +937,9 @@ class ParserOptions {
 
 	/**
 	 * @warning For interaction with the parser cache, use
-	 *  WikiPage::makeParserOptions(), ContentHandler::makeParserOptions(), or
-	 *  ParserOptions::newCanonical() instead.
-	 * @param User $user
-	 * @param Language $lang
+	 *  WikiPage::makeParserOptions() or ParserOptions::newCanonical() instead.
+	 * @param User|null $user
+	 * @param Language|null $lang
 	 */
 	public function __construct( $user = null, $lang = null ) {
 		if ( $user === null ) {
@@ -957,8 +963,7 @@ class ParserOptions {
 	/**
 	 * Get a ParserOptions object for an anonymous user
 	 * @warning For interaction with the parser cache, use
-	 *  WikiPage::makeParserOptions(), ContentHandler::makeParserOptions(), or
-	 *  ParserOptions::newCanonical() instead.
+	 *  WikiPage::makeParserOptions() or ParserOptions::newCanonical() instead.
 	 * @since 1.27
 	 * @return ParserOptions
 	 */
@@ -972,8 +977,7 @@ class ParserOptions {
 	 * Language will be taken from $wgLang.
 	 *
 	 * @warning For interaction with the parser cache, use
-	 *  WikiPage::makeParserOptions(), ContentHandler::makeParserOptions(), or
-	 *  ParserOptions::newCanonical() instead.
+	 *  WikiPage::makeParserOptions() or ParserOptions::newCanonical() instead.
 	 * @param User $user
 	 * @return ParserOptions
 	 */
@@ -985,8 +989,7 @@ class ParserOptions {
 	 * Get a ParserOptions object from a given user and language
 	 *
 	 * @warning For interaction with the parser cache, use
-	 *  WikiPage::makeParserOptions(), ContentHandler::makeParserOptions(), or
-	 *  ParserOptions::newCanonical() instead.
+	 *  WikiPage::makeParserOptions() or ParserOptions::newCanonical() instead.
 	 * @param User $user
 	 * @param Language $lang
 	 * @return ParserOptions
@@ -999,8 +1002,7 @@ class ParserOptions {
 	 * Get a ParserOptions object from a IContextSource object
 	 *
 	 * @warning For interaction with the parser cache, use
-	 *  WikiPage::makeParserOptions(), ContentHandler::makeParserOptions(), or
-	 *  ParserOptions::newCanonical() instead.
+	 *  WikiPage::makeParserOptions() or ParserOptions::newCanonical() instead.
 	 * @param IContextSource $context
 	 * @return ParserOptions
 	 */
@@ -1015,12 +1017,29 @@ class ParserOptions {
 	 * different from the canonical values used for caching.
 	 *
 	 * @since 1.30
-	 * @param User|null $user
-	 * @param Language|StubObject|null $lang
+	 * @since 1.32 Added string and IContextSource as options for the first parameter
+	 * @param IContextSource|string|User|null $context
+	 *  - If an IContextSource, the options are initialized based on the source's User and Language.
+	 *  - If the string 'canonical', the options are initialized with an anonymous user and
+	 *    $wgContLang.
+	 *  - If a User or null, the options are initialized for that User (or $wgUser if null).
+	 *    'userlang' is taken from the $userLang parameter, defaulting to $wgLang if that is null.
+	 * @param Language|StubObject|null $userLang (see above)
 	 * @return ParserOptions
 	 */
-	public static function newCanonical( User $user = null, $lang = null ) {
-		$ret = new ParserOptions( $user, $lang );
+	public static function newCanonical( $context = null, $userLang = null ) {
+		if ( $context instanceof IContextSource ) {
+			$ret = self::newFromContext( $context );
+		} elseif ( $context === 'canonical' ) {
+			$ret = self::newFromAnon();
+		} elseif ( $context instanceof User || $context === null ) {
+			$ret = new self( $context, $userLang );
+		} else {
+			throw new InvalidArgumentException(
+				'$context must be an IContextSource, the string "canonical", a User, or null'
+			);
+		}
+
 		foreach ( self::getCanonicalOverrides() as $k => $v ) {
 			$ret->setOption( $k, $v );
 		}
@@ -1059,8 +1078,8 @@ class ParserOptions {
 				'printable' => false,
 				'allowUnsafeRawHtml' => true,
 				'wrapclass' => 'mw-parser-output',
-				'currentRevisionCallback' => [ 'Parser', 'statelessFetchRevision' ],
-				'templateCallback' => [ 'Parser', 'statelessFetchTemplate' ],
+				'currentRevisionCallback' => [ Parser::class, 'statelessFetchRevision' ],
+				'templateCallback' => [ Parser::class, 'statelessFetchTemplate' ],
 				'speculativeRevIdCallback' => null,
 			];
 
@@ -1213,7 +1232,7 @@ class ParserOptions {
 	 * in 1.16.
 	 * Used to get the old parser cache entries when available.
 	 * @deprecated since 1.30. You probably want self::allCacheVaryingOptions() instead.
-	 * @return array
+	 * @return string[]
 	 */
 	public static function legacyOptions() {
 		wfDeprecated( __METHOD__, '1.30' );
@@ -1256,7 +1275,7 @@ class ParserOptions {
 		} elseif ( $value instanceof Language ) {
 			return $value->getCode();
 		} elseif ( is_array( $value ) ) {
-			return '[' . join( ',', array_map( [ $this, 'optionToString' ], $value ) ) . ']';
+			return '[' . implode( ',', array_map( [ $this, 'optionToString' ], $value ) ) . ']';
 		} else {
 			return (string)$value;
 		}
@@ -1270,28 +1289,24 @@ class ParserOptions {
 	 * the same cached data safely.
 	 *
 	 * @since 1.17
-	 * @param array $forOptions
-	 * @param Title $title Used to get the content language of the page (since r97636)
+	 * @param string[] $forOptions
+	 * @param Title|null $title Used to get the content language of the page (since r97636)
 	 * @return string Page rendering hash
 	 */
 	public function optionsHash( $forOptions, $title = null ) {
 		global $wgRenderHashAppend;
 
+		$inCacheKey = self::allCacheVaryingOptions();
+
+		// Resolve any lazy options
+		foreach ( array_intersect( $forOptions, $inCacheKey, array_keys( self::$lazyOptions ) ) as $k ) {
+			if ( $this->options[$k] === null ) {
+				$this->options[$k] = call_user_func( self::$lazyOptions[$k], $this, $k );
+			}
+		}
+
 		$options = $this->options;
 		$defaults = self::getCanonicalOverrides() + self::getDefaults();
-		$inCacheKey = self::$inCacheKey;
-
-		// Historical hack: 'editsection' hasn't been a true parser option since
-		// Feb 2015 (instead the parser outputs a constant placeholder and post-parse
-		// processing handles the option). But Wikibase forces it in $forOptions
-		// and expects the cache key to still vary on it for T85252.
-		// @deprecated since 1.30, Wikibase should use addExtraKey() or something instead.
-		if ( in_array( 'editsection', $forOptions, true ) ) {
-			$options['editsection'] = $this->mEditSection;
-			$defaults['editsection'] = true;
-			$inCacheKey['editsection'] = true;
-			ksort( $inCacheKey );
-		}
 
 		// We only include used options with non-canonical values in the key
 		// so adding a new option doesn't invalidate the entire parser cache.
@@ -1299,17 +1314,15 @@ class ParserOptions {
 		// requires manual invalidation of existing cache entries, as mentioned
 		// in the docs on the relevant methods and hooks.
 		$values = [];
-		foreach ( $inCacheKey as $option => $include ) {
-			if ( $include && in_array( $option, $forOptions, true ) ) {
-				$v = $this->optionToString( $options[$option] );
-				$d = $this->optionToString( $defaults[$option] );
-				if ( $v !== $d ) {
-					$values[] = "$option=$v";
-				}
+		foreach ( array_intersect( $inCacheKey, $forOptions ) as $option ) {
+			$v = $this->optionToString( $options[$option] );
+			$d = $this->optionToString( $defaults[$option] );
+			if ( $v !== $d ) {
+				$values[] = "$option=$v";
 			}
 		}
 
-		$confstr = $values ? join( '!', $values ) : 'canonical';
+		$confstr = $values ? implode( '!', $values ) : 'canonical';
 
 		// add in language specific options, if any
 		// @todo FIXME: This is just a way of retrieving the url/user preferred variant
@@ -1394,11 +1407,12 @@ class ParserOptions {
 			};
 		end( $wgHooks['TitleExists'] );
 		$key = key( $wgHooks['TitleExists'] );
-		LinkCache::singleton()->clearBadLink( $title->getPrefixedDBkey() );
-		return new ScopedCallback( function () use ( $title, $key ) {
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
+		$linkCache->clearBadLink( $title->getPrefixedDBkey() );
+		return new ScopedCallback( function () use ( $title, $key, $linkCache ) {
 			global $wgHooks;
 			unset( $wgHooks['TitleExists'][$key] );
-			LinkCache::singleton()->clearLink( $title );
+			$linkCache->clearLink( $title );
 		} );
 	}
 }

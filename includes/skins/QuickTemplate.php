@@ -31,20 +31,14 @@ abstract class QuickTemplate {
 	 */
 	public $data;
 
-	/**
-	 * @var MediaWikiI18N
-	 */
-	public $translator;
-
 	/** @var Config $config */
 	protected $config;
 
 	/**
-	 * @param Config $config
+	 * @param Config|null $config
 	 */
 	function __construct( Config $config = null ) {
 		$this->data = [];
-		$this->translator = new MediaWikiI18N();
 		if ( $config === null ) {
 			wfDebug( __METHOD__ . ' was called with no Config instance passed to it' );
 			$config = MediaWikiServices::getInstance()->getMainConfig();
@@ -79,30 +73,23 @@ abstract class QuickTemplate {
 	 * Gets the template data requested
 	 * @since 1.22
 	 * @param string $name Key for the data
-	 * @param mixed $default Optional default (or null)
+	 * @param mixed|null $default Optional default (or null)
 	 * @return mixed The value of the data requested or the deafult
 	 */
 	public function get( $name, $default = null ) {
-		if ( isset( $this->data[$name] ) ) {
-			return $this->data[$name];
-		} else {
-			return $default;
-		}
+		return $this->data[$name] ?? $default;
 	}
 
 	/**
+	 * @deprecated since 1.31 This function is a now-redundant optimisation intended
+	 *  for very old versions of PHP. The use of references here makes the code
+	 *  more fragile and is incompatible with plans like T140664. Use set() instead.
 	 * @param string $name
 	 * @param mixed &$value
 	 */
 	public function setRef( $name, &$value ) {
+		wfDeprecated( __METHOD__, '1.31' );
 		$this->data[$name] =& $value;
-	}
-
-	/**
-	 * @param MediaWikiI18N &$t
-	 */
-	public function setTranslator( &$t ) {
-		$this->translator = &$t;
 	}
 
 	/**
@@ -129,29 +116,29 @@ abstract class QuickTemplate {
 
 	/**
 	 * @private
-	 * @param string $str
+	 * @param string $msgKey
 	 */
-	function msg( $str ) {
-		echo htmlspecialchars( $this->translator->translate( $str ) );
+	function msg( $msgKey ) {
+		echo htmlspecialchars( wfMessage( $msgKey )->text() );
 	}
 
 	/**
 	 * @private
-	 * @param string $str
+	 * @param string $msgKey
 	 */
-	function msgHtml( $str ) {
-		echo $this->translator->translate( $str );
+	function msgHtml( $msgKey ) {
+		echo wfMessage( $msgKey )->text();
 	}
 
 	/**
 	 * An ugly, ugly hack.
 	 * @private
-	 * @param string $str
+	 * @param string $msgKey
 	 */
-	function msgWiki( $str ) {
+	function msgWiki( $msgKey ) {
 		global $wgOut;
 
-		$text = $this->translator->translate( $str );
+		$text = wfMessage( $msgKey )->text();
 		echo $wgOut->parse( $text );
 	}
 
@@ -167,12 +154,12 @@ abstract class QuickTemplate {
 	/**
 	 * @private
 	 *
-	 * @param string $str
+	 * @param string $msgKey
 	 * @return bool
 	 */
-	function haveMsg( $str ) {
-		$msg = $this->translator->translate( $str );
-		return ( $msg != '-' ) && ( $msg != '' ); # ????
+	function haveMsg( $msgKey ) {
+		$msg = wfMessage( $msgKey );
+		return $msg->exists() && !$msg->isDisabled();
 	}
 
 	/**

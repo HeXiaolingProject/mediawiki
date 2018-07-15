@@ -185,7 +185,8 @@ class MysqlUpdater extends DatabaseUpdater {
 			[ 'doClFieldsUpdate' ],
 			[ 'addTable', 'module_deps', 'patch-module_deps.sql' ],
 			[ 'dropIndex', 'archive', 'ar_page_revid', 'patch-archive_kill_ar_page_revid.sql' ],
-			[ 'addIndex', 'archive', 'ar_revid', 'patch-archive_ar_revid.sql' ],
+			[ 'addIndexIfNoneExist',
+				'archive', [ 'ar_revid', 'ar_revid_uniq' ], 'patch-archive_ar_revid.sql' ],
 			[ 'doLangLinksLengthUpdate' ],
 
 			// 1.18
@@ -196,7 +197,6 @@ class MysqlUpdater extends DatabaseUpdater {
 			[ 'addTable', 'user_former_groups', 'patch-user_former_groups.sql' ],
 
 			// 1.19
-			[ 'addIndex', 'logging', 'type_action', 'patch-logging-type-action-index.sql' ],
 			[ 'addField', 'revision', 'rev_sha1', 'patch-rev_sha1.sql' ],
 			[ 'doMigrateUserOptions' ],
 			[ 'dropField', 'user', 'user_options', 'patch-drop-user_options.sql' ],
@@ -325,6 +325,10 @@ class MysqlUpdater extends DatabaseUpdater {
 			[ 'renameIndex', 'user_properties', 'user_properties_user_property', 'PRIMARY', false,
 				'patch-user_properties-fix-pk.sql' ],
 			[ 'addTable', 'comment', 'patch-comment-table.sql' ],
+
+			// This field was added in 1.31, but is put here so it can be used by 'migrateComments'
+			[ 'addField', 'image', 'img_description_id', 'patch-image-img_description_id.sql' ],
+
 			[ 'migrateComments' ],
 			[ 'renameIndex', 'l10n_cache', 'lc_lang_key', 'PRIMARY', false,
 				'patch-l10n_cache-primary-key.sql' ],
@@ -332,10 +336,37 @@ class MysqlUpdater extends DatabaseUpdater {
 
 			// 1.31
 			[ 'addTable', 'slots', 'patch-slots.sql' ],
+			[ 'addField', 'slots', 'slot_origin', 'patch-slot-origin.sql' ],
 			[ 'addTable', 'content', 'patch-content.sql' ],
 			[ 'addTable', 'slot_roles', 'patch-slot_roles.sql' ],
 			[ 'addTable', 'content_models', 'patch-content_models.sql' ],
 			[ 'migrateArchiveText' ],
+			[ 'addTable', 'actor', 'patch-actor-table.sql' ],
+			[ 'migrateActors' ],
+			[ 'modifyField', 'revision', 'rev_text_id', 'patch-rev_text_id-default.sql' ],
+			[ 'modifyTable', 'site_stats', 'patch-site_stats-modify.sql' ],
+			[ 'populateArchiveRevId' ],
+			[ 'addIndex', 'recentchanges', 'rc_namespace_title_timestamp',
+				'patch-recentchanges-nttindex.sql' ],
+
+			// 1.32
+			[ 'addTable', 'change_tag_def', 'patch-change_tag_def.sql' ],
+			[ 'populateExternallinksIndex60' ],
+			[ 'modifyfield', 'externallinks', 'el_index_60',
+				'patch-externallinks-el_index_60-drop-default.sql' ],
+			[ 'runMaintenance', DeduplicateArchiveRevId::class, 'maintenance/deduplicateArchiveRevId.php' ],
+			[ 'addField', 'change_tag', 'ct_tag_id', 'patch-change_tag-tag_id.sql' ],
+			[ 'addIndex', 'archive', 'ar_revid_uniq', 'patch-archive-ar_rev_id-unique.sql' ],
+			[ 'populateContentTables' ],
+			[ 'addIndex', 'logging', 'log_type_action', 'patch-logging-log-type-action-index.sql' ],
+			[ 'dropIndex', 'logging', 'type_action', 'patch-logging-drop-type-action-index.sql' ],
+			[ 'renameIndex', 'interwiki', 'iw_prefix', 'PRIMARY', false, 'patch-interwiki-fix-pk.sql' ],
+			[ 'renameIndex', 'page_props', 'pp_page_propname', 'PRIMARY', false,
+				'patch-page_props-fix-pk.sql' ],
+			[ 'renameIndex', 'protected_titles', 'pt_namespace_title', 'PRIMARY', false,
+				'patch-protected_titles-fix-pk.sql' ],
+			[ 'renameIndex', 'site_identifiers', 'site_ids_type', 'PRIMARY', false,
+				'patch-site_identifiers-fix-pk.sql' ],
 		];
 	}
 
@@ -432,7 +463,7 @@ class MysqlUpdater extends DatabaseUpdater {
 	}
 
 	protected function doOldLinksUpdate() {
-		$cl = $this->maintenance->runChild( 'ConvertLinks' );
+		$cl = $this->maintenance->runChild( ConvertLinks::class );
 		$cl->execute();
 	}
 
@@ -472,6 +503,17 @@ class MysqlUpdater extends DatabaseUpdater {
 			return;
 		}
 
+		$insertOpts = [ 'IGNORE' ];
+		$selectOpts = [];
+
+		// If wl_id exists, make insertSelect() more replication-safe by
+		// ordering on that column. If not, hint that it should be safe anyway.
+		if ( $this->db->fieldExists( 'watchlist', 'wl_id', __METHOD__ ) ) {
+			$selectOpts['ORDER BY'] = 'wl_id';
+		} else {
+			$insertOpts[] = 'NO_AUTO_COLUMNS';
+		}
+
 		$this->output( "Adding missing watchlist talk page rows... " );
 		$this->db->insertSelect( 'watchlist', 'watchlist',
 			[
@@ -479,7 +521,7 @@ class MysqlUpdater extends DatabaseUpdater {
 				'wl_namespace' => 'wl_namespace | 1',
 				'wl_title' => 'wl_title',
 				'wl_notificationtimestamp' => 'wl_notificationtimestamp'
-			], [ 'NOT (wl_namespace & 1)' ], __METHOD__, 'IGNORE' );
+			], [ 'NOT (wl_namespace & 1)' ], __METHOD__, $insertOpts, $selectOpts );
 		$this->output( "done.\n" );
 
 		$this->output( "Adding missing watchlist subject page rows... " );
@@ -489,7 +531,7 @@ class MysqlUpdater extends DatabaseUpdater {
 				'wl_namespace' => 'wl_namespace & ~1',
 				'wl_title' => 'wl_title',
 				'wl_notificationtimestamp' => 'wl_notificationtimestamp'
-			], [ 'wl_namespace & 1' ], __METHOD__, 'IGNORE' );
+			], [ 'wl_namespace & 1' ], __METHOD__, $insertOpts, $selectOpts );
 		$this->output( "done.\n" );
 	}
 
@@ -872,7 +914,8 @@ class MysqlUpdater extends DatabaseUpdater {
 		$this->applyPatch( 'patch-templatelinks.sql', false, "Creating templatelinks table" );
 
 		$this->output( "Populating...\n" );
-		if ( wfGetLB()->getServerCount() > 1 ) {
+		$services = MediaWikiServices::getInstance();
+		if ( $services->getDBLoadBalancer()->getServerCount() > 1 ) {
 			// Slow, replication-friendly update
 			$res = $this->db->select( 'pagelinks', [ 'pl_from', 'pl_namespace', 'pl_title' ],
 				[ 'pl_namespace' => NS_TEMPLATE ], __METHOD__ );
@@ -880,7 +923,7 @@ class MysqlUpdater extends DatabaseUpdater {
 			foreach ( $res as $row ) {
 				$count = ( $count + 1 ) % 100;
 				if ( $count == 0 ) {
-					$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+					$lbFactory = $services->getDBLoadBalancerFactory();
 					$lbFactory->waitForReplication( [ 'wiki' => wfWikiID() ] );
 				}
 				$this->db->insert( 'templatelinks',
@@ -900,7 +943,8 @@ class MysqlUpdater extends DatabaseUpdater {
 					'tl_title' => 'pl_title'
 				], [
 					'pl_namespace' => 10
-				], __METHOD__
+				], __METHOD__,
+				[ 'NO_AUTO_COLUMNS' ] // There's no "tl_id" auto-increment field
 			);
 		}
 		$this->output( "Done. Please run maintenance/refreshLinks.php for a more " .
@@ -941,7 +985,7 @@ class MysqlUpdater extends DatabaseUpdater {
 		$this->output( "done.\n" );
 
 		$this->output( "Migrating old restrictions to new table...\n" );
-		$task = $this->maintenance->runChild( 'UpdateRestrictions' );
+		$task = $this->maintenance->runChild( UpdateRestrictions::class );
 		$task->execute();
 	}
 
@@ -964,7 +1008,7 @@ class MysqlUpdater extends DatabaseUpdater {
 			"may want to hit Ctrl-C and do this manually with maintenance/\n" .
 			"populateCategory.php.\n"
 		);
-		$task = $this->maintenance->runChild( 'PopulateCategory' );
+		$task = $this->maintenance->runChild( PopulateCategory::class );
 		$task->execute();
 		$this->output( "Done populating category table.\n" );
 	}
@@ -976,7 +1020,7 @@ class MysqlUpdater extends DatabaseUpdater {
 				"databases, you may want to hit Ctrl-C and do this manually with\n" .
 				"maintenance/populateParentId.php.\n" );
 
-			$task = $this->maintenance->runChild( 'PopulateParentId' );
+			$task = $this->maintenance->runChild( PopulateParentId::class );
 			$task->execute();
 		}
 	}
@@ -1187,7 +1231,7 @@ class MysqlUpdater extends DatabaseUpdater {
 				'Extending edit summary lengths (and setting defaults)'
 			);
 		} else {
-			$this->output( '...comment fields are up to date' );
+			$this->output( "...comment fields are up to date.\n" );
 		}
 	}
 

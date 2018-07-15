@@ -65,6 +65,19 @@ class ResourceLoaderModuleTest extends ResourceLoaderTestCase {
 	}
 
 	/**
+	 * @covers ResourceLoaderModule::getVersionHash
+	 */
+	public function testGetVersionHash_parentDefinition() {
+		$context = $this->getResourceLoaderContext();
+		$module = $this->getMockBuilder( ResourceLoaderModule::class )
+			->setMethods( [ 'getDefinitionSummary' ] )->getMock();
+		$module->method( 'getDefinitionSummary' )->willReturn( [ 'a' => 'summary' ] );
+
+		$this->setExpectedException( LogicException::class, 'must call parent' );
+		$module->getVersionHash( $context );
+	}
+
+	/**
 	 * @covers ResourceLoaderModule::validateScriptFile
 	 */
 	public function testValidateScriptFile() {
@@ -149,9 +162,9 @@ class ResourceLoaderModuleTest extends ResourceLoaderTestCase {
 	 * @covers ResourceLoaderModule::expandRelativePaths
 	 */
 	public function testPlaceholderize() {
-		$getRelativePaths = new ReflectionMethod( 'ResourceLoaderModule', 'getRelativePaths' );
+		$getRelativePaths = new ReflectionMethod( ResourceLoaderModule::class, 'getRelativePaths' );
 		$getRelativePaths->setAccessible( true );
-		$expandRelativePaths = new ReflectionMethod( 'ResourceLoaderModule', 'expandRelativePaths' );
+		$expandRelativePaths = new ReflectionMethod( ResourceLoaderModule::class, 'expandRelativePaths' );
 		$expandRelativePaths->setAccessible( true );
 
 		$this->setMwGlobals( [

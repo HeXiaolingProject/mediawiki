@@ -102,7 +102,7 @@ class DifferenceEngine extends ContextSource {
 	/**#@-*/
 
 	/**
-	 * @param IContextSource $context Context to use, anything else will be ignored
+	 * @param IContextSource|null $context Context to use, anything else will be ignored
 	 * @param int $old Old ID we want to show and diff with.
 	 * @param string|int $new Either revision ID or 'prev' or 'next'. Default: 0.
 	 * @param int $rcid Deprecated, no longer used!
@@ -132,6 +132,8 @@ class DifferenceEngine extends ContextSource {
 	}
 
 	/**
+	 * Get the language of the difference engine, defaults to page content language
+	 *
 	 * @return Language
 	 */
 	public function getDiffLang() {
@@ -312,7 +314,7 @@ class DifferenceEngine extends ContextSource {
 					$rollbackLink = Linker::generateRollback( $this->mNewRev, $this->getContext() );
 					if ( $rollbackLink ) {
 						$out->preventClickjacking();
-						$rollback = '&#160;&#160;&#160;' . $rollbackLink;
+						$rollback = "\u{00A0}\u{00A0}\u{00A0}" . $rollbackLink;
 					}
 				}
 
@@ -342,7 +344,7 @@ class DifferenceEngine extends ContextSource {
 					[ 'diff' => 'prev', 'oldid' => $this->mOldid ] + $query
 				);
 			} else {
-				$prevlink = '&#160;';
+				$prevlink = "\u{00A0}";
 			}
 
 			if ( $this->mOldRev->isMinor() ) {
@@ -395,7 +397,7 @@ class DifferenceEngine extends ContextSource {
 				[ 'diff' => 'next', 'oldid' => $this->mNewid ] + $query
 			);
 		} else {
-			$nextlink = '&#160;';
+			$nextlink = "\u{00A0}";
 		}
 
 		if ( $this->mNewRev->isMinor() ) {
@@ -524,7 +526,7 @@ class DifferenceEngine extends ContextSource {
 	 *  or false if no link is needed
 	 */
 	protected function getMarkPatrolledLinkInfo() {
-		global $wgUseRCPatrol, $wgEnableAPI, $wgEnableWriteAPI;
+		global $wgUseRCPatrol;
 
 		$user = $this->getUser();
 
@@ -542,7 +544,7 @@ class DifferenceEngine extends ContextSource {
 				[
 					'rc_timestamp' => $db->timestamp( $this->mNewRev->getTimestamp() ),
 					'rc_this_oldid' => $this->mNewid,
-					'rc_patrolled' => 0
+					'rc_patrolled' => RecentChange::PRC_UNPATROLLED
 				],
 				__METHOD__
 			);
@@ -564,9 +566,7 @@ class DifferenceEngine extends ContextSource {
 			// Build the link
 			if ( $rcid ) {
 				$this->getOutput()->preventClickjacking();
-				if ( $wgEnableAPI && $wgEnableWriteAPI
-					&& $user->isAllowed( 'writeapi' )
-				) {
+				if ( $user->isAllowed( 'writeapi' ) ) {
 					$this->getOutput()->addModules( 'mediawiki.page.patrol.ajax' );
 				}
 
@@ -588,7 +588,7 @@ class DifferenceEngine extends ContextSource {
 	protected function revisionDeleteLink( $rev ) {
 		$link = Linker::getRevDeleteLink( $this->getUser(), $rev, $rev->getTitle() );
 		if ( $link !== '' ) {
-			$link = '&#160;&#160;&#160;' . $link . ' ';
+			$link = "\u{00A0}\u{00A0}\u{00A0}" . $link . ' ';
 		}
 
 		return $link;
@@ -650,13 +650,14 @@ class DifferenceEngine extends ContextSource {
 		}
 	}
 
+	/**
+	 * @param WikiPage $page
+	 * @param Revision $rev
+	 *
+	 * @return ParserOutput|bool False if the revision was not found
+	 */
 	protected function getParserOutput( WikiPage $page, Revision $rev ) {
 		$parserOptions = $page->makeParserOptions( $this->getContext() );
-
-		if ( !$rev->isCurrent() || !$rev->getTitle()->quickUserCan( 'edit', $this->getUser() ) ) {
-			$parserOptions->setEditSection( false );
-		}
-
 		$parserOutput = $page->getParserOutput( $parserOptions, $rev->getId() );
 
 		return $parserOutput;
@@ -757,10 +758,7 @@ class DifferenceEngine extends ContextSource {
 			// for backwards-compatibility
 			$key = $this->getDiffBodyCacheKey();
 			if ( $key === null ) {
-				$key = call_user_func_array(
-					[ $cache, 'makeKey' ],
-					$this->getDiffBodyCacheKeyParams()
-				);
+				$key = $cache->makeKey( ...$this->getDiffBodyCacheKeyParams() );
 			}
 
 			// Try cache
@@ -1293,7 +1291,7 @@ class DifferenceEngine extends ContextSource {
 
 		if ( !$diff && !$otitle ) {
 			$header .= "
-			<tr style=\"vertical-align: top;\" lang=\"{$userLang}\">
+			<tr class=\"diff-title\" lang=\"{$userLang}\">
 			<td class=\"diff-ntitle\">{$ntitle}</td>
 			</tr>";
 			$multiColspan = 1;
@@ -1312,7 +1310,7 @@ class DifferenceEngine extends ContextSource {
 			}
 			if ( $otitle || $ntitle ) {
 				$header .= "
-				<tr style=\"vertical-align: top;\" lang=\"{$userLang}\">
+				<tr class=\"diff-title\" lang=\"{$userLang}\">
 				<td colspan=\"$colspan\" class=\"diff-otitle\">{$otitle}</td>
 				<td colspan=\"$colspan\" class=\"diff-ntitle\">{$ntitle}</td>
 				</tr>";
@@ -1320,12 +1318,12 @@ class DifferenceEngine extends ContextSource {
 		}
 
 		if ( $multi != '' ) {
-			$header .= "<tr><td colspan=\"{$multiColspan}\" style=\"text-align: center;\" " .
+			$header .= "<tr><td colspan=\"{$multiColspan}\" " .
 				"class=\"diff-multi\" lang=\"{$userLang}\">{$multi}</td></tr>";
 		}
 		if ( $notice != '' ) {
-			$header .= "<tr><td colspan=\"{$multiColspan}\" style=\"text-align: center;\" " .
-				"lang=\"{$userLang}\">{$notice}</td></tr>";
+			$header .= "<tr><td colspan=\"{$multiColspan}\" " .
+				"class=\"diff-notice\" lang=\"{$userLang}\">{$notice}</td></tr>";
 		}
 
 		return $header . $diff . "</table>";
@@ -1347,11 +1345,14 @@ class DifferenceEngine extends ContextSource {
 
 	/**
 	 * Set the language in which the diff text is written
-	 * (Defaults to page content language).
-	 * @param Language|string $lang
+	 *
+	 * @param Language $lang
 	 * @since 1.19
 	 */
 	public function setTextLanguage( $lang ) {
+		if ( !$lang instanceof Language ) {
+			wfDeprecated( __METHOD__ . ' with other type than Language for $lang', '1.32' );
+		}
 		$this->mDiffLang = wfGetLangObj( $lang );
 	}
 

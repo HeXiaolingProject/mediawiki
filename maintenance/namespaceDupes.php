@@ -37,7 +37,7 @@ use Wikimedia\Rdbms\IMaintainableDatabase;
  *
  * @ingroup Maintenance
  */
-class NamespaceConflictChecker extends Maintenance {
+class NamespaceDupes extends Maintenance {
 
 	/**
 	 * @var IMaintainableDatabase
@@ -161,17 +161,8 @@ class NamespaceConflictChecker extends Maintenance {
 		// break the tie by sorting by name
 		$origSpaces = $spaces;
 		uksort( $spaces, function ( $a, $b ) use ( $origSpaces ) {
-			if ( $origSpaces[$a] < $origSpaces[$b] ) {
-				return -1;
-			} elseif ( $origSpaces[$a] > $origSpaces[$b] ) {
-				return 1;
-			} elseif ( $a < $b ) {
-				return -1;
-			} elseif ( $a > $b ) {
-				return 1;
-			} else {
-				return 0;
-			}
+			return $origSpaces[$a] <=> $origSpaces[$b]
+				?: $a <=> $b;
 		} );
 
 		$ok = true;
@@ -616,5 +607,5 @@ class NamespaceConflictChecker extends Maintenance {
 	}
 }
 
-$maintClass = "NamespaceConflictChecker";
+$maintClass = NamespaceDupes::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

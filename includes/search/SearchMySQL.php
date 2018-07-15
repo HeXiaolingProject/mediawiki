@@ -34,15 +34,15 @@ class SearchMySQL extends SearchDatabase {
 	private static $mMinSearchLength;
 
 	/**
-	 * Parse the user's query and transform it into an SQL fragment which will
-	 * become part of a WHERE clause
+	 * Parse the user's query and transform it into two SQL fragments:
+	 * a WHERE condition and an ORDER BY expression
 	 *
 	 * @param string $filteredText
 	 * @param string $fulltext
 	 *
-	 * @return string
+	 * @return array
 	 */
-	function parseQuery( $filteredText, $fulltext ) {
+	private function parseQuery( $filteredText, $fulltext ) {
 		global $wgContLang;
 
 		$lc = $this->legalSearchChars( self::CHARS_NO_SYNTAX ); // Minus syntax chars (" and *)
@@ -54,9 +54,9 @@ class SearchMySQL extends SearchDatabase {
 		if ( preg_match_all( '/([-+<>~]?)(([' . $lc . ']+)(\*?)|"[^"]*")/',
 				$filteredText, $m, PREG_SET_ORDER ) ) {
 			foreach ( $m as $bits ) {
-				MediaWiki\suppressWarnings();
+				Wikimedia\suppressWarnings();
 				list( /* all */, $modifier, $term, $nonQuoted, $wildcard ) = $bits;
-				MediaWiki\restoreWarnings();
+				Wikimedia\restoreWarnings();
 
 				if ( $nonQuoted != '' ) {
 					$term = $nonQuoted;
@@ -127,10 +127,13 @@ class SearchMySQL extends SearchDatabase {
 
 		$searchon = $this->db->addQuotes( $searchon );
 		$field = $this->getIndexField( $fulltext );
-		return " MATCH($field) AGAINST($searchon IN BOOLEAN MODE) ";
+		return [
+			" MATCH($field) AGAINST($searchon IN BOOLEAN MODE) ",
+			" MATCH($field) AGAINST($searchon IN NATURAL LANGUAGE MODE) DESC "
+		];
 	}
 
-	function regexTerm( $string, $wildcard ) {
+	private function regexTerm( $string, $wildcard ) {
 		global $wgContLang;
 
 		$regex = preg_quote( $string, '/' );
@@ -164,7 +167,7 @@ class SearchMySQL extends SearchDatabase {
 	 * @param string $term Raw search term
 	 * @return SqlSearchResultSet
 	 */
-	function searchText( $term ) {
+	protected function doSearchText( $term ) {
 		return $this->searchInternal( $term, true );
 	}
 
@@ -174,7 +177,7 @@ class SearchMySQL extends SearchDatabase {
 	 * @param string $term Raw search term
 	 * @return SqlSearchResultSet
 	 */
-	function searchTitle( $term ) {
+	protected function doSearchTitle( $term ) {
 		return $this->searchInternal( $term, false );
 	}
 
@@ -261,7 +264,7 @@ class SearchMySQL extends SearchDatabase {
 	 * @return array
 	 * @since 1.18 (changed)
 	 */
-	function getQuery( $filteredTerm, $fulltext ) {
+	private function getQuery( $filteredTerm, $fulltext ) {
 		$query = [
 			'tables' => [],
 			'fields' => [],
@@ -283,7 +286,7 @@ class SearchMySQL extends SearchDatabase {
 	 * @param bool $fulltext
 	 * @return string
 	 */
-	function getIndexField( $fulltext ) {
+	private function getIndexField( $fulltext ) {
 		return $fulltext ? 'si_text' : 'si_title';
 	}
 
@@ -295,7 +298,7 @@ class SearchMySQL extends SearchDatabase {
 	 * @param bool $fulltext
 	 * @since 1.18 (changed)
 	 */
-	function queryMain( &$query, $filteredTerm, $fulltext ) {
+	private function queryMain( &$query, $filteredTerm, $fulltext ) {
 		$match = $this->parseQuery( $filteredTerm, $fulltext );
 		$query['tables'][] = 'page';
 		$query['tables'][] = 'searchindex';
@@ -303,7 +306,8 @@ class SearchMySQL extends SearchDatabase {
 		$query['fields'][] = 'page_namespace';
 		$query['fields'][] = 'page_title';
 		$query['conds'][] = 'page_id=si_page';
-		$query['conds'][] = $match;
+		$query['conds'][] = $match[0];
+		$query['options']['ORDER BY'] = $match[1];
 	}
 
 	/**
@@ -312,13 +316,13 @@ class SearchMySQL extends SearchDatabase {
 	 * @param bool $fulltext
 	 * @return array
 	 */
-	function getCountQuery( $filteredTerm, $fulltext ) {
+	private function getCountQuery( $filteredTerm, $fulltext ) {
 		$match = $this->parseQuery( $filteredTerm, $fulltext );
 
 		$query = [
 			'tables' => [ 'page', 'searchindex' ],
 			'fields' => [ 'COUNT(*) as c' ],
-			'conds' => [ 'page_id=si_page', $match ],
+			'conds' => [ 'page_id=si_page', $match[0] ],
 			'options' => [],
 			'joins' => [],
 		];

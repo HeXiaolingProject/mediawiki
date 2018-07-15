@@ -55,7 +55,7 @@ class JobQueueDB extends JobQueue {
 	protected function __construct( array $params ) {
 		parent::__construct( $params );
 
-		$this->cluster = isset( $params['cluster'] ) ? $params['cluster'] : false;
+		$this->cluster = $params['cluster'] ?? false;
 		$this->cache = ObjectCache::getMainWANInstance();
 	}
 
@@ -190,13 +190,13 @@ class JobQueueDB extends JobQueue {
 		// If the connection is busy with a transaction, then defer the job writes
 		// until right before the main round commit step. Any errors that bubble
 		// up will rollback the main commit round.
-		// b) mysql/postgres; DB connection is generally a separate CONN_TRX_AUTO handle.
+		// b) mysql/postgres; DB connection is generally a separate CONN_TRX_AUTOCOMMIT handle.
 		// No transaction is active nor will be started by writes, so enqueue the jobs
 		// now so that any errors will show up immediately as the interface expects. Any
 		// errors that bubble up will rollback the main commit round.
 		$fname = __METHOD__;
 		$dbw->onTransactionPreCommitOrIdle(
-			function () use ( $dbw, $jobs, $flags, $fname ) {
+			function ( IDatabase $dbw ) use ( $jobs, $flags, $fname ) {
 				$this->doBatchPushInternal( $dbw, $jobs, $flags, $fname );
 			},
 			$fname
@@ -500,15 +500,15 @@ class JobQueueDB extends JobQueue {
 			throw new MWException( "Cannot register root job; missing 'rootJobTimestamp'." );
 		}
 		$key = $this->getRootJobCacheKey( $params['rootJobSignature'] );
-		// Callers should call batchInsert() and then this function so that if the insert
+		// Callers should call JobQueueGroup::push() before this method so that if the insert
 		// fails, the de-duplication registration will be aborted. Since the insert is
 		// deferred till "transaction idle", do the same here, so that the ordering is
 		// maintained. Having only the de-duplication registration succeed would cause
 		// jobs to become no-ops without any actual jobs that made them redundant.
 		$dbw = $this->getMasterDB();
 		$cache = $this->dupCache;
-		$dbw->onTransactionIdle(
-			function () use ( $cache, $params, $key, $dbw ) {
+		$dbw->onTransactionCommitOrIdle(
+			function () use ( $cache, $params, $key ) {
 				$timestamp = $cache->get( $key ); // current last timestamp of this job
 				if ( $timestamp && $timestamp >= $params['rootJobTimestamp'] ) {
 					return true; // a newer version of this root job was enqueued
@@ -780,7 +780,7 @@ class JobQueueDB extends JobQueue {
 		return ( $lb->getServerType( $lb->getWriterIndex() ) !== 'sqlite' )
 			// Keep a separate connection to avoid contention and deadlocks;
 			// However, SQLite has the opposite behavior due to DB-level locking.
-			? $lb->getConnectionRef( $index, [], $this->wiki, $lb::CONN_TRX_AUTO )
+			? $lb->getConnectionRef( $index, [], $this->wiki, $lb::CONN_TRX_AUTOCOMMIT )
 			// Jobs insertion will be defered until the PRESEND stage to reduce contention.
 			: $lb->getConnectionRef( $index, [], $this->wiki );
 	}

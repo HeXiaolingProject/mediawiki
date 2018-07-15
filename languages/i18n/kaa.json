@@ -9,7 +9,8 @@
 			"Reedy",
 			"Urhixidur",
 			"아라",
-			"Macofe"
+			"Macofe",
+			"Fitoschido"
 		]
 	},
 	"tog-underline": "Siltewdin' astın sız:",
@@ -677,8 +678,6 @@
 	"newpageletter": "T",
 	"boteditletter": "b",
 	"number_of_watching_users_pageview": "[Baqlag'an {{PLURAL:$1|1 paydalanıwshı|$1 paydalanıwshı}}]",
-	"rc_categories": "Kategoriyalarg'a sheklew (\"|\" belgisi menen ajıratın')",
-	"rc_categories_any": "Ha'r qanday",
 	"newsectionsummary": "/* $1 */ taza bo'lim",
 	"rc-enhanced-expand": "Tolıq mag'lıwmattı ko'rsetiw (JavaScriptti talap etedi)",
 	"rc-enhanced-hide": "Tolıq mag'lıwmattı jasırıw",
@@ -797,7 +796,7 @@
 	"statistics-files": "Aploud qılıng'an fayllar",
 	"statistics-edits": "{{SITENAME}} ornatılg'anlı beri bettegi o'zgerisler sanı",
 	"statistics-edits-average": "Ha'r bir betke ortasha kiritilgen o'zgerisler sanı",
-	"statistics-users": "Registratsiyadan o'tken [[Special:ListUsers|paydalanıwshılar]]",
+	"statistics-users": "Registratsiyadan o'tken paydalanıwshılar",
 	"statistics-users-active": "Aktiv paydalanıwshılar",
 	"doubleredirects": "Qos burıwshılar",
 	"double-redirect-fixer": "Qayta bag'ıtlawshılardı du'zetiwshi",
@@ -1025,8 +1024,8 @@
 	"whatlinkshere": "Siltelgen betler",
 	"whatlinkshere-title": "\"$1\" betine siltelgen betler",
 	"whatlinkshere-page": "Bet:",
-	"linkshere": "To'mendegi betler mınag'an siltelgen: '''[[:$1]]''':",
-	"nolinkshere": "'''[[:$1]]''' degenge hesh bet siltemeydi.",
+	"linkshere": "To'mendegi betler mınag'an siltelgen: '''$2''':",
+	"nolinkshere": "'''$2''' degenge hesh bet siltemeydi.",
 	"isredirect": "burıwshı bet",
 	"istemplate": "qosıw",
 	"isimage": "fayl siltewi",

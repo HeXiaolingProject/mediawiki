@@ -1,12 +1,12 @@
 /*!
- * OOjs UI v0.25.0
- * https://www.mediawiki.org/wiki/OOjs_UI
+ * OOUI v0.27.5
+ * https://www.mediawiki.org/wiki/OOUI
  *
- * Copyright 2011–2018 OOjs UI Team and other contributors.
+ * Copyright 2011–2018 OOUI Team and other contributors.
  * Released under the MIT license
  * http://oojs.mit-license.org
  *
- * Date: 2018-01-10T00:26:02Z
+ * Date: 2018-07-11T18:13:04Z
  */
 ( function ( OO ) {
 
@@ -34,7 +34,7 @@ OO.inheritClass( OO.ui.WikimediaUITheme, OO.ui.Theme );
  */
 OO.ui.WikimediaUITheme.prototype.getElementClasses = function ( element ) {
 	// Parent method
-	var variant, isFramed, isActive,
+	var variant, isFramed, isActive, isToolOrGroup,
 		variants = {
 			warning: false,
 			invert: false,
@@ -44,14 +44,24 @@ OO.ui.WikimediaUITheme.prototype.getElementClasses = function ( element ) {
 		// Parent method
 		classes = OO.ui.WikimediaUITheme.parent.prototype.getElementClasses.call( this, element );
 
-	if ( element.supports( [ 'hasFlag' ] ) ) {
+	if (
+		element instanceof OO.ui.IconWidget &&
+		element.$element.hasClass( 'oo-ui-checkboxInputWidget-checkIcon' )
+	) {
+		// Icon on CheckboxInputWidget
+		variants.invert = true;
+	} else if ( element.supports( [ 'hasFlag' ] ) ) {
 		isFramed = element.supports( [ 'isFramed' ] ) && element.isFramed();
 		isActive = element.supports( [ 'isActive' ] ) && element.isActive();
+		isToolOrGroup =
+			// Check if the class exists, as classes that are not in the 'core' module may not be loaded
+			( OO.ui.Tool && element instanceof OO.ui.Tool ) ||
+			( OO.ui.ToolGroup && element instanceof OO.ui.ToolGroup );
 		if (
 			// Button with a dark background
 			isFramed && ( isActive || element.isDisabled() || element.hasFlag( 'primary' ) ) ||
 			// Toolbar with a dark background
-			OO.ui.ToolGroup && element instanceof OO.ui.ToolGroup && ( isActive || element.hasFlag( 'primary' ) )
+			isToolOrGroup && element.hasFlag( 'primary' )
 		) {
 			// … use white icon / indicator, regardless of other flags
 			variants.invert = true;
@@ -60,7 +70,19 @@ OO.ui.WikimediaUITheme.prototype.getElementClasses = function ( element ) {
 			variants.invert = false;
 		} else if ( !element.isDisabled() ) {
 			// Any other kind of button, use the right colored icon / indicator if available
-			variants.progressive = element.hasFlag( 'progressive' );
+			variants.progressive = element.hasFlag( 'progressive' ) ||
+				// Active tools/toolgroups
+				( isToolOrGroup && isActive ) ||
+				// Pressed or selected outline/menu option widgets
+				(
+					(
+						element instanceof OO.ui.MenuOptionWidget ||
+						// Check if the class exists, as classes that are not in the 'core' module may not be loaded
+						( OO.ui.OutlineOptionWidget && element instanceof OO.ui.OutlineOptionWidget )
+					) &&
+					( element.isPressed() || element.isSelected() )
+				);
+
 			variants.destructive = element.hasFlag( 'destructive' );
 			variants.warning = element.hasFlag( 'warning' );
 		}
@@ -86,4 +108,4 @@ OO.ui.theme = new OO.ui.WikimediaUITheme();
 
 }( OO ) );
 
-//# sourceMappingURL=oojs-ui-wikimediaui.js.map
+//# sourceMappingURL=oojs-ui-wikimediaui.js.map.json

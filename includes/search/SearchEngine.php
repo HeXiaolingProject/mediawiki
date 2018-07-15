@@ -69,12 +69,27 @@ abstract class SearchEngine {
 	/**
 	 * Perform a full text search query and return a result set.
 	 * If full text searches are not supported or disabled, return null.
-	 * STUB
+	 *
+	 * As of 1.32 overriding this function is deprecated. It will
+	 * be converted to final in 1.34. Override self::doSearchText().
 	 *
 	 * @param string $term Raw search term
 	 * @return SearchResultSet|Status|null
 	 */
-	function searchText( $term ) {
+	public function searchText( $term ) {
+		return $this->maybePaginate( function () use ( $term ) {
+			return $this->doSearchText( $term );
+		} );
+	}
+
+	/**
+	 * Perform a full text search query and return a result set.
+	 *
+	 * @param string $term Raw search term
+	 * @return SearchResultSet|Status|null
+	 * @since 1.32
+	 */
+	protected function doSearchText( $term ) {
 		return null;
 	}
 
@@ -85,11 +100,25 @@ abstract class SearchEngine {
 	 * The results returned by this methods are only sugegstions and
 	 * may not end up being shown to the user.
 	 *
+	 * As of 1.32 overriding this function is deprecated. It will
+	 * be converted to final in 1.34. Override self::doSearchArchiveTitle().
+	 *
 	 * @param string $term Raw search term
 	 * @return Status<Title[]>
 	 * @since 1.29
 	 */
-	function searchArchiveTitle( $term ) {
+	public function searchArchiveTitle( $term ) {
+		return $this->doSearchArchiveTitle( $term );
+	}
+
+	/**
+	 * Perform a title search in the article archive.
+	 *
+	 * @param string $term Raw search term
+	 * @return Status<Title[]>
+	 * @since 1.32
+	 */
+	protected function doSearchArchiveTitle( $term ) {
 		return Status::newGood( [] );
 	}
 
@@ -98,11 +127,61 @@ abstract class SearchEngine {
 	 * If title searches are not supported or disabled, return null.
 	 * STUB
 	 *
+	 * As of 1.32 overriding this function is deprecated. It will
+	 * be converted to final in 1.34. Override self::doSearchTitle().
+	 *
 	 * @param string $term Raw search term
 	 * @return SearchResultSet|null
 	 */
-	function searchTitle( $term ) {
+	public function searchTitle( $term ) {
+		return $this->maybePaginate( function () use ( $term ) {
+			return $this->doSearchTitle( $term );
+		} );
+	}
+
+	/**
+	 * Perform a title-only search query and return a result set.
+	 *
+	 * @param string $term Raw search term
+	 * @return SearchResultSet|null
+	 * @since 1.32
+	 */
+	protected function doSearchTitle( $term ) {
 		return null;
+	}
+
+	/**
+	 * Performs an overfetch and shrink operation to determine if
+	 * the next page is available for search engines that do not
+	 * explicitly implement their own pagination.
+	 *
+	 * @param Closure $fn Takes no arguments
+	 * @return SearchResultSet|Status<SearchResultSet>|null Result of calling $fn
+	 */
+	private function maybePaginate( Closure $fn ) {
+		if ( $this instanceof PaginatingSearchEngine ) {
+			return $fn();
+		}
+		$this->limit++;
+		try {
+			$resultSetOrStatus = $fn();
+		} finally {
+			$this->limit--;
+		}
+
+		$resultSet = null;
+		if ( $resultSetOrStatus instanceof SearchResultSet ) {
+			$resultSet = $resultSetOrStatus;
+		} elseif ( $resultSetOrStatus instanceof Status &&
+			$resultSetOrStatus->getValue() instanceof SearchResultSet
+		) {
+			$resultSet = $resultSetOrStatus->getValue();
+		}
+		if ( $resultSet ) {
+			$resultSet->shrink( $this->limit );
+		}
+
+		return $resultSetOrStatus;
 	}
 
 	/**
@@ -335,12 +414,25 @@ abstract class SearchEngine {
 			return false;
 		}
 		$extractedNamespace = null;
+		$allkeywords = [];
 
-		$allkeyword = wfMessage( 'searchall' )->inContentLanguage()->text() . ":";
-		if ( strncmp( $query, $allkeyword, strlen( $allkeyword ) ) == 0 ) {
-			$extractedNamespace = null;
-			$parsed = substr( $query, strlen( $allkeyword ) );
-		} elseif ( strpos( $query, ':' ) !== false ) {
+		$allkeywords[] = wfMessage( 'searchall' )->inContentLanguage()->text() . ":";
+		// force all: so that we have a common syntax for all the wikis
+		if ( !in_array( 'all:', $allkeywords ) ) {
+			$allkeywords[] = 'all:';
+		}
+
+		$allQuery = false;
+		foreach ( $allkeywords as $kw ) {
+			if ( strncmp( $query, $kw, strlen( $kw ) ) == 0 ) {
+				$extractedNamespace = null;
+				$parsed = substr( $query, strlen( $kw ) );
+				$allQuery = true;
+				break;
+			}
+		}
+
+		if ( !$allQuery && strpos( $query, ':' ) !== false ) {
 			// TODO: should we unify with PrefixSearch::extractNamespace ?
 			$prefix = str_replace( ' ', '_', substr( $query, 0, strpos( $query, ':' ) ) );
 			$index = $wgContLang->getNsIndex( $prefix );
@@ -407,24 +499,13 @@ abstract class SearchEngine {
 	}
 
 	/**
-	 * Get OpenSearch suggestion template
-	 *
-	 * @deprecated since 1.25
-	 * @return string
-	 */
-	public static function getOpenSearchTemplate() {
-		wfDeprecated( __METHOD__, '1.25' );
-		return ApiOpenSearch::getOpenSearchTemplate( 'application/x-suggestions+json' );
-	}
-
-	/**
 	 * Get the raw text for updating the index from a content object
 	 * Nicer search backends could possibly do something cooler than
 	 * just returning raw text
 	 *
 	 * @todo This isn't ideal, we'd really like to have content-specific handling here
 	 * @param Title $t Title we're indexing
-	 * @param Content $c Content of the page to index
+	 * @param Content|null $c Content of the page to index
 	 * @return string
 	 */
 	public function getTextFromContent( Title $t, Content $c = null ) {
@@ -481,6 +562,22 @@ abstract class SearchEngine {
 	}
 
 	/**
+	 * Perform an overfetch of completion search results. This allows
+	 * determining if another page of results is available.
+	 *
+	 * @param string $search
+	 * @return SearchSuggestionSet
+	 */
+	protected function completionSearchBackendOverfetch( $search ) {
+		$this->limit++;
+		try {
+			return $this->completionSearchBackend( $search );
+		} finally {
+			$this->limit--;
+		}
+	}
+
+	/**
 	 * Perform a completion search.
 	 * Does not resolve namespaces and does not check variants.
 	 * Search engine implementations may want to override this function.
@@ -517,7 +614,8 @@ abstract class SearchEngine {
 			return SearchSuggestionSet::emptySuggestionSet(); // Return empty result
 		}
 		$search = $this->normalizeNamespaces( $search );
-		return $this->processCompletionResults( $search, $this->completionSearchBackend( $search ) );
+		$suggestions = $this->completionSearchBackendOverfetch( $search );
+		return $this->processCompletionResults( $search, $suggestions );
 	}
 
 	/**
@@ -531,8 +629,8 @@ abstract class SearchEngine {
 		}
 		$search = $this->normalizeNamespaces( $search );
 
-		$results = $this->completionSearchBackend( $search );
-		$fallbackLimit = $this->limit - $results->getSize();
+		$results = $this->completionSearchBackendOverfetch( $search );
+		$fallbackLimit = 1 + $this->limit - $results->getSize();
 		if ( $fallbackLimit > 0 ) {
 			global $wgContLang;
 
@@ -543,7 +641,7 @@ abstract class SearchEngine {
 				$this->setLimitOffset( $fallbackLimit );
 				$fallbackSearchResult = $this->completionSearch( $fbs );
 				$results->appendAll( $fallbackSearchResult );
-				$fallbackLimit -= count( $fallbackSearchResult );
+				$fallbackLimit -= $fallbackSearchResult->getSize();
 				if ( $fallbackLimit <= 0 ) {
 					break;
 				}
@@ -571,14 +669,25 @@ abstract class SearchEngine {
 	 * @return SearchSuggestionSet
 	 */
 	protected function processCompletionResults( $search, SearchSuggestionSet $suggestions ) {
+		// We over-fetched to determine pagination. Shrink back down if we have extra results
+		// and mark if pagination is possible
+		$suggestions->shrink( $this->limit );
+
 		$search = trim( $search );
 		// preload the titles with LinkBatch
-		$titles = $suggestions->map( function ( SearchSuggestion $sugg ) {
+		$lb = new LinkBatch( $suggestions->map( function ( SearchSuggestion $sugg ) {
 			return $sugg->getSuggestedTitle();
-		} );
-		$lb = new LinkBatch( $titles );
+		} ) );
 		$lb->setCaller( __METHOD__ );
 		$lb->execute();
+
+		$diff = $suggestions->filter( function ( SearchSuggestion $sugg ) {
+			return $sugg->getSuggestedTitle()->isKnown();
+		} );
+		if ( $diff > 0 ) {
+			MediaWikiServices::getInstance()->getStatsdDataFactory()
+				->updateCount( 'search.completion.missing', $diff );
+		}
 
 		$results = $suggestions->map( function ( SearchSuggestion $sugg ) {
 			return $sugg->getSuggestedTitle()->getPrefixedText();
@@ -787,7 +896,6 @@ abstract class SearchEngine {
 		$setAugmentors = [];
 		$rowAugmentors = [];
 		Hooks::run( "SearchResultsAugment", [ &$setAugmentors, &$rowAugmentors ] );
-
 		if ( !$setAugmentors && !$rowAugmentors ) {
 			// We're done here
 			return;

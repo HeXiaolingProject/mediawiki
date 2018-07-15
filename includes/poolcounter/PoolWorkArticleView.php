@@ -53,7 +53,7 @@ class PoolWorkArticleView extends PoolCounterWork {
 	 * @param int $revid ID of the revision being parsed.
 	 * @param bool $useParserCache Whether to use the parser cache.
 	 *   operation.
-	 * @param Content|string $content Content to parse or null to load it; may
+	 * @param Content|string|null $content Content to parse or null to load it; may
 	 *   also be given as a wikitext string, for BC.
 	 */
 	public function __construct( WikiPage $page, ParserOptions $parserOptions,
@@ -79,7 +79,7 @@ class PoolWorkArticleView extends PoolCounterWork {
 	/**
 	 * Get the ParserOutput from this object, or false in case of failure
 	 *
-	 * @return ParserOutput
+	 * @return ParserOutput|bool
 	 */
 	public function getParserOutput() {
 		return $this->parserOutput;

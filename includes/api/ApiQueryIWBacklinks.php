@@ -2,8 +2,6 @@
 /**
  * API for MediaWiki 1.17+
  *
- * Created on May 14, 2010
- *
  * Copyright © 2010 Sam Reed
  * Copyright © 2006 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
@@ -44,7 +42,7 @@ class ApiQueryIWBacklinks extends ApiQueryGeneratorBase {
 	}
 
 	/**
-	 * @param ApiPageSet $resultPageSet
+	 * @param ApiPageSet|null $resultPageSet
 	 * @return void
 	 */
 	public function run( $resultPageSet = null ) {

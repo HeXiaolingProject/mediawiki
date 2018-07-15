@@ -17,6 +17,9 @@ abstract class HTMLFormField {
 	protected $mVFormClass = '';
 	protected $mHelpClass = false;
 	protected $mDefault;
+	/**
+	 * @var array|bool|null
+	 */
 	protected $mOptions = false;
 	protected $mOptionsLabelsNotFromMessage = false;
 	protected $mHideIf = null;
@@ -78,12 +81,9 @@ abstract class HTMLFormField {
 		$args = func_get_args();
 
 		if ( $this->mParent ) {
-			$callback = [ $this->mParent, 'msg' ];
-		} else {
-			$callback = 'wfMessage';
+			return $this->mParent->msg( ...$args );
 		}
-
-		return call_user_func_array( $callback, $args );
+		return wfMessage( ...$args );
 	}
 
 	/**
@@ -312,7 +312,7 @@ abstract class HTMLFormField {
 		}
 
 		if ( isset( $this->mValidationCallback ) ) {
-			return call_user_func( $this->mValidationCallback, $value, $alldata, $this->mParent );
+			return ( $this->mValidationCallback )( $value, $alldata, $this->mParent );
 		}
 
 		return true;
@@ -320,7 +320,7 @@ abstract class HTMLFormField {
 
 	public function filter( $value, $alldata ) {
 		if ( isset( $this->mFilterCallback ) ) {
-			$value = call_user_func( $this->mFilterCallback, $value, $alldata, $this->mParent );
+			$value = ( $this->mFilterCallback )( $value, $alldata, $this->mParent );
 		}
 
 		return $value;
@@ -397,9 +397,9 @@ abstract class HTMLFormField {
 		if ( isset( $params['label-message'] ) ) {
 			$this->mLabel = $this->getMessage( $params['label-message'] )->parse();
 		} elseif ( isset( $params['label'] ) ) {
-			if ( $params['label'] === '&#160;' ) {
+			if ( $params['label'] === '&#160;' || $params['label'] === "\u{00A0}" ) {
 				// Apparently some things set &nbsp directly and in an odd format
-				$this->mLabel = '&#160;';
+				$this->mLabel = "\u{00A0}";
 			} else {
 				$this->mLabel = htmlspecialchars( $params['label'] );
 			}
@@ -543,11 +543,10 @@ abstract class HTMLFormField {
 			'mw-htmlform-nolabel' => ( $label === '' )
 		];
 
-		$horizontalLabel = isset( $this->mParams['horizontal-label'] )
-			? $this->mParams['horizontal-label'] : false;
+		$horizontalLabel = $this->mParams['horizontal-label'] ?? false;
 
 		if ( $horizontalLabel ) {
-			$field = '&#160;' . $inputHtml . "\n$errors";
+			$field = "\u{00A0}" . $inputHtml . "\n$errors";
 		} else {
 			$field = Html::rawElement(
 				'div',
@@ -631,7 +630,7 @@ abstract class HTMLFormField {
 
 		// the element could specify, that the label doesn't need to be added
 		$label = $this->getLabel();
-		if ( $label && $label !== '&#160;' ) {
+		if ( $label && $label !== "\u{00A0}" && $label !== '&#160;' ) {
 			$config['label'] = new OOUI\HtmlSnippet( $label );
 		}
 
@@ -673,7 +672,7 @@ abstract class HTMLFormField {
 	}
 
 	/**
-	 * Whether the field should be automatically infused. Note that all OOjs UI HTMLForm fields are
+	 * Whether the field should be automatically infused. Note that all OOUI HTMLForm fields are
 	 * infusable (you can call OO.ui.infuse() on them), but not all are infused by default, since
 	 * there is no benefit in doing it e.g. for buttons and it's a small performance hit on page load.
 	 *
@@ -686,7 +685,7 @@ abstract class HTMLFormField {
 
 	/**
 	 * Get the list of extra ResourceLoader modules which must be loaded client-side before it's
-	 * possible to infuse this field's OOjs UI widget.
+	 * possible to infuse this field's OOUI widget.
 	 *
 	 * @return string[]
 	 */
@@ -746,7 +745,7 @@ abstract class HTMLFormField {
 		$label = $this->getLabelHtml( $cellAttributes );
 
 		$html = "\n" . $errors .
-			$label . '&#160;' .
+			$label . "\u{00A0}" .
 			$inputHtml .
 			$helptext;
 
@@ -927,7 +926,7 @@ abstract class HTMLFormField {
 	 * @return string HTML
 	 */
 	public function getLabel() {
-		return is_null( $this->mLabel ) ? '' : $this->mLabel;
+		return $this->mLabel ?? '';
 	}
 
 	public function getLabelHtml( $cellAttributes = [] ) {
@@ -941,14 +940,13 @@ abstract class HTMLFormField {
 
 		$labelValue = trim( $this->getLabel() );
 		$hasLabel = false;
-		if ( $labelValue !== '&#160;' && $labelValue !== '' ) {
+		if ( $labelValue !== "\u{00A0}" && $labelValue !== '&#160;' && $labelValue !== '' ) {
 			$hasLabel = true;
 		}
 
 		$displayFormat = $this->mParent->getDisplayFormat();
 		$html = '';
-		$horizontalLabel = isset( $this->mParams['horizontal-label'] )
-			? $this->mParams['horizontal-label'] : false;
+		$horizontalLabel = $this->mParams['horizontal-label'] ?? false;
 
 		if ( $displayFormat === 'table' ) {
 			$html =
@@ -970,11 +968,7 @@ abstract class HTMLFormField {
 	}
 
 	public function getDefault() {
-		if ( isset( $this->mDefault ) ) {
-			return $this->mDefault;
-		} else {
-			return null;
-		}
+		return $this->mDefault ?? null;
 	}
 
 	/**

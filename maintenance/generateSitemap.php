@@ -177,7 +177,7 @@ class GenerateSitemap extends Maintenance {
 	public function execute() {
 		$this->setNamespacePriorities();
 		$this->url_limit = 50000;
-		$this->size_limit = pow( 2, 20 ) * 10;
+		$this->size_limit = ( 2 ** 20 ) * 10;
 
 		# Create directory if needed
 		$fspath = $this->getOption( 'fspath', getcwd() );
@@ -276,9 +276,7 @@ class GenerateSitemap extends Maintenance {
 	 * @return string
 	 */
 	function priority( $namespace ) {
-		return isset( $this->priorities[$namespace] )
-			? $this->priorities[$namespace]
-			: $this->guessPriority( $namespace );
+		return $this->priorities[$namespace] ?? $this->guessPriority( $namespace );
 	}
 
 	/**
@@ -541,7 +539,7 @@ class GenerateSitemap extends Maintenance {
 	 */
 	function generateLimit( $namespace ) {
 		// T19961: make a title with the longest possible URL in this namespace
-		$title = Title::makeTitle( $namespace, str_repeat( "\xf0\xa8\xae\x81", 63 ) . "\xe5\x96\x83" );
+		$title = Title::makeTitle( $namespace, str_repeat( "\u{28B81}", 63 ) . "\u{5583}" );
 
 		$this->limit = [
 			strlen( $this->openFile() ),
@@ -555,5 +553,5 @@ class GenerateSitemap extends Maintenance {
 	}
 }
 
-$maintClass = "GenerateSitemap";
+$maintClass = GenerateSitemap::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

@@ -24,6 +24,7 @@
 
 require_once __DIR__ . '/Maintenance.php';
 
+use MediaWiki\MediaWikiServices;
 use Wikimedia\Rdbms\ResultWrapper;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\DBQueryError;
@@ -40,6 +41,7 @@ class MwSql extends Maintenance {
 			'Takes a file name containing SQL as argument or runs interactively.' );
 		$this->addOption( 'query',
 			'Run a single query instead of running interactively', false, true );
+		$this->addOption( 'json', 'Output the results as JSON instead of PHP objects' );
 		$this->addOption( 'cluster', 'Use an external cluster by name', false, true );
 		$this->addOption( 'wikidb',
 			'The database wiki ID to use if not the current one', false, true );
@@ -53,10 +55,11 @@ class MwSql extends Maintenance {
 		// We wan't to allow "" for the wikidb, meaning don't call select_db()
 		$wiki = $this->hasOption( 'wikidb' ) ? $this->getOption( 'wikidb' ) : false;
 		// Get the appropriate load balancer (for this wiki)
+		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
 		if ( $this->hasOption( 'cluster' ) ) {
-			$lb = wfGetLBFactory()->getExternalLB( $this->getOption( 'cluster' ) );
+			$lb = $lbFactory->getExternalLB( $this->getOption( 'cluster' ) );
 		} else {
-			$lb = wfGetLB( $wiki );
+			$lb = $lbFactory->getMainLB( $wiki );
 		}
 		// Figure out which server to use
 		$replicaDB = $this->getOption( 'replicadb', $this->getOption( 'slave', '' ) );
@@ -175,9 +178,15 @@ class MwSql extends Maintenance {
 			// Do nothing
 			return;
 		} elseif ( is_object( $res ) && $res->numRows() ) {
+			$out = '';
 			foreach ( $res as $row ) {
-				$this->output( print_r( $row, true ) );
+				$out .= print_r( $row, true );
+				$rows[] = $row;
 			}
+			if ( $this->hasOption( 'json' ) ) {
+				$out = json_encode( $rows, JSON_PRETTY_PRINT );
+			}
+			$this->output( $out . "\n" );
 		} else {
 			$affected = $db->affectedRows();
 			$this->output( "Query OK, $affected row(s) affected\n" );
@@ -192,5 +201,5 @@ class MwSql extends Maintenance {
 	}
 }
 
-$maintClass = "MwSql";
+$maintClass = MwSql::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

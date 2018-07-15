@@ -197,8 +197,8 @@ class HistoryAction extends FormlessAction {
 		$content .= Xml::dateMenu(
 			( $year == null ? MWTimestamp::getLocalInstance()->format( 'Y' ) : $year ),
 			$month
-		) . '&#160;';
-		$content .= $tagSelector ? ( implode( '&#160;', $tagSelector ) . '&#160;' ) : '';
+		) . "\u{00A0}";
+		$content .= $tagSelector ? ( implode( "\u{00A0}", $tagSelector ) . "\u{00A0}" ) : '';
 		$content .= $checkDeleted . Html::submitButton(
 			$this->msg( 'historyaction-submit' )->text(),
 			[],
@@ -711,9 +711,7 @@ class HistoryPager extends ReverseChronologicalPager {
 		# Sometimes rev_len isn't populated
 		if ( $rev->getSize() !== null ) {
 			# Size is always public data
-			$prevSize = isset( $this->parentLens[$row->rev_parent_id] )
-				? $this->parentLens[$row->rev_parent_id]
-				: 0;
+			$prevSize = $this->parentLens[$row->rev_parent_id] ?? 0;
 			$sDiff = ChangesList::showCharacterDifference( $prevSize, $rev->getSize() );
 			$fSize = Linker::formatRevisionSize( $rev->getSize() );
 			$s .= ' <span class="mw-changeslist-separator">. .</span> ' . "$fSize $sDiff";
@@ -838,7 +836,7 @@ class HistoryPager extends ReverseChronologicalPager {
 		} else {
 			return MediaWikiServices::getInstance()->getLinkRenderer()->makeKnownLink(
 				$this->getTitle(),
-				$cur,
+				new HtmlArmor( $cur ),
 				[],
 				[
 					'diff' => $this->getWikiPage()->getLatest(),
@@ -870,7 +868,7 @@ class HistoryPager extends ReverseChronologicalPager {
 			# Next row probably exists but is unknown, use an oldid=prev link
 			return $linkRenderer->makeKnownLink(
 				$this->getTitle(),
-				$last,
+				new HtmlArmor( $last ),
 				[],
 				[
 					'diff' => $prevRev->getId(),
@@ -889,7 +887,7 @@ class HistoryPager extends ReverseChronologicalPager {
 
 		return $linkRenderer->makeKnownLink(
 			$this->getTitle(),
-			$last,
+			new HtmlArmor( $last ),
 			[],
 			[
 				'diff' => $prevRev->getId(),

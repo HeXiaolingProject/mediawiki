@@ -26,6 +26,7 @@ use MediaWiki\MediaWikiServices;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Wikimedia\RelPath;
 use Wikimedia\ScopedCallback;
 
 /**
@@ -138,7 +139,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 *
 	 * @return string JavaScript code
 	 */
-	protected function getDeprecationInformation() {
+	public function getDeprecationInformation() {
 		$deprecationInfo = $this->deprecated;
 		if ( $deprecationInfo ) {
 			$name = $this->getName();
@@ -317,23 +318,13 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	}
 
 	/**
-	 * Get the origin of this module. Should only be overridden for foreign modules.
+	 * Get the source of this module. Should only be overridden for foreign modules.
 	 *
-	 * @return string Origin name, 'local' for local modules
+	 * @return string Source name, 'local' for local modules
 	 */
 	public function getSource() {
 		// Stub, override expected
 		return 'local';
-	}
-
-	/**
-	 * From where in the page HTML should this module be loaded?
-	 *
-	 * @deprecated since 1.29 Obsolete. All modules load async from `<head>`.
-	 * @return string
-	 */
-	public function getPosition() {
-		return 'top';
 	}
 
 	/**
@@ -356,7 +347,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 * Note: It is expected that $context will be made non-optional in the near
 	 * future.
 	 *
-	 * @param ResourceLoaderContext $context
+	 * @param ResourceLoaderContext|null $context
 	 * @return array List of module names as strings
 	 */
 	public function getDependencies( ResourceLoaderContext $context = null ) {
@@ -527,7 +518,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	public static function getRelativePaths( array $filePaths ) {
 		global $IP;
 		return array_map( function ( $path ) use ( $IP ) {
-			return RelPath\getRelativePath( $path, $IP );
+			return RelPath::getRelativePath( $path, $IP );
 		}, $filePaths );
 	}
 
@@ -541,7 +532,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	public static function expandRelativePaths( array $filePaths ) {
 		global $IP;
 		return array_map( function ( $path ) use ( $IP ) {
-			return RelPath\joinPath( $IP, $path );
+			return RelPath::joinPath( $IP, $path );
 		}, $filePaths );
 	}
 
@@ -629,7 +620,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 *             'https://example.org/image.png' => [ 'as' => 'image' ],
 	 *         ];
 	 *     }
-	 * @encode
+	 * @endcode
 	 *
 	 * @par Example using HiDPI image variants
 	 * @code
@@ -645,7 +636,7 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 *             ],
 	 *         ];
 	 *     }
-	 * @encode
+	 * @endcode
 	 *
 	 * @see ResourceLoaderModule::getHeaders
 	 * @since 1.30
@@ -808,11 +799,6 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 * This method should be quick because it is frequently run by ResourceLoaderStartUpModule to
 	 * propagate changes to the client and effectively invalidate cache.
 	 *
-	 * For backward-compatibility, the following optional data providers are automatically included:
-	 *
-	 * - getModifiedTime()
-	 * - getModifiedHash()
-	 *
 	 * @since 1.26
 	 * @param ResourceLoaderContext $context
 	 * @return string Hash (should use ResourceLoader::makeHash)
@@ -842,18 +828,6 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 					throw new LogicException( 'getDefinitionSummary must call parent method' );
 				}
 				$str = json_encode( $summary );
-
-				$mtime = $this->getModifiedTime( $context );
-				if ( $mtime !== null ) {
-					// Support: MediaWiki 1.25 and earlier
-					$str .= strval( $mtime );
-				}
-
-				$mhash = $this->getModifiedHash( $context );
-				if ( $mhash !== null ) {
-					// Support: MediaWiki 1.25 and earlier
-					$str .= strval( $mhash );
-				}
 			}
 
 			$this->versionHash[$contextHash] = ResourceLoader::makeHash( $str );
@@ -922,63 +896,6 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 			'_class' => static::class,
 			'_cacheEpoch' => $this->getConfig()->get( 'CacheEpoch' ),
 		];
-	}
-
-	/**
-	 * Get this module's last modification timestamp for a given context.
-	 *
-	 * @deprecated since 1.26 Use getDefinitionSummary() instead
-	 * @param ResourceLoaderContext $context
-	 * @return int|null UNIX timestamp
-	 */
-	public function getModifiedTime( ResourceLoaderContext $context ) {
-		return null;
-	}
-
-	/**
-	 * Helper method for providing a version hash to getVersionHash().
-	 *
-	 * @deprecated since 1.26 Use getDefinitionSummary() instead
-	 * @param ResourceLoaderContext $context
-	 * @return string|null Hash
-	 */
-	public function getModifiedHash( ResourceLoaderContext $context ) {
-		return null;
-	}
-
-	/**
-	 * Back-compat dummy for old subclass implementations of getModifiedTime().
-	 *
-	 * This method used to use ObjectCache to track when a hash was first seen. That principle
-	 * stems from a time that ResourceLoader could only identify module versions by timestamp.
-	 * That is no longer the case. Use getDefinitionSummary() directly.
-	 *
-	 * @deprecated since 1.26 Superseded by getVersionHash()
-	 * @param ResourceLoaderContext $context
-	 * @return int UNIX timestamp
-	 */
-	public function getHashMtime( ResourceLoaderContext $context ) {
-		if ( !is_string( $this->getModifiedHash( $context ) ) ) {
-			return 1;
-		}
-		// Dummy that is > 1
-		return 2;
-	}
-
-	/**
-	 * Back-compat dummy for old subclass implementations of getModifiedTime().
-	 *
-	 * @since 1.23
-	 * @deprecated since 1.26 Superseded by getVersionHash()
-	 * @param ResourceLoaderContext $context
-	 * @return int UNIX timestamp
-	 */
-	public function getDefinitionMtime( ResourceLoaderContext $context ) {
-		if ( $this->getDefinitionSummary( $context ) === null ) {
-			return 1;
-		}
-		// Dummy that is > 1
-		return 2;
 	}
 
 	/**
@@ -1068,9 +985,9 @@ abstract class ResourceLoaderModule implements LoggerAwareInterface {
 	 * @return int UNIX timestamp
 	 */
 	protected static function safeFilemtime( $filePath ) {
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$mtime = filemtime( $filePath ) ?: 1;
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 		return $mtime;
 	}
 

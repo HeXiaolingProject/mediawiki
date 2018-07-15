@@ -21,6 +21,7 @@
  * @ingroup SpecialPage
  */
 
+use MediaWiki\MediaWikiServices;
 use MediaWiki\Widget\DateInputWidget;
 
 /**
@@ -39,23 +40,17 @@ class SpecialContributions extends IncludableSpecialPage {
 		$this->setHeaders();
 		$this->outputHeader();
 		$out = $this->getOutput();
+		// Modules required for viewing the list of contributions (also when included on other pages)
 		$out->addModuleStyles( [
 			'mediawiki.special',
 			'mediawiki.special.changeslist',
-			'mediawiki.widgets.DateInputWidget.styles',
 		] );
-		$out->addModules( 'mediawiki.special.contributions' );
 		$this->addHelpLink( 'Help:User contributions' );
-		$out->enableOOUI();
 
 		$this->opts = [];
 		$request = $this->getRequest();
 
-		if ( $par !== null ) {
-			$target = $par;
-		} else {
-			$target = $request->getVal( 'target' );
-		}
+		$target = $par ?? $request->getVal( 'target' );
 
 		if ( $request->getVal( 'contribs' ) == 'newbie' || $par === 'newbies' ) {
 			$target = 'newbies';
@@ -82,21 +77,39 @@ class SpecialContributions extends IncludableSpecialPage {
 		$this->opts['newOnly'] = $request->getBool( 'newOnly' );
 		$this->opts['hideMinor'] = $request->getBool( 'hideMinor' );
 
-		$nt = Title::makeTitleSafe( NS_USER, $target );
-		if ( !$nt ) {
-			$out->addHTML( $this->getForm() );
+		$id = 0;
+		if ( $this->opts['contribs'] === 'newbie' ) {
+			$userObj = User::newFromName( $target ); // hysterical raisins
+			$out->addSubtitle( $this->msg( 'sp-contributions-newbies-sub' ) );
+			$out->setHTMLTitle( $this->msg(
+				'pagetitle',
+				$this->msg( 'sp-contributions-newbies-title' )->plain()
+			)->inContentLanguage() );
+		} elseif ( ExternalUserNames::isExternal( $target ) ) {
+			$userObj = User::newFromName( $target, false );
+			if ( !$userObj ) {
+				$out->addHTML( $this->getForm() );
+				return;
+			}
 
-			return;
-		}
-		$userObj = User::newFromName( $nt->getText(), false );
-		if ( !$userObj ) {
-			$out->addHTML( $this->getForm() );
+			$out->addSubtitle( $this->contributionsSub( $userObj ) );
+			$out->setHTMLTitle( $this->msg(
+				'pagetitle',
+				$this->msg( 'contributions-title', $target )->plain()
+			)->inContentLanguage() );
+		} else {
+			$nt = Title::makeTitleSafe( NS_USER, $target );
+			if ( !$nt ) {
+				$out->addHTML( $this->getForm() );
+				return;
+			}
+			$userObj = User::newFromName( $nt->getText(), false );
+			if ( !$userObj ) {
+				$out->addHTML( $this->getForm() );
+				return;
+			}
+			$id = $userObj->getId();
 
-			return;
-		}
-		$id = $userObj->getId();
-
-		if ( $this->opts['contribs'] != 'newbie' ) {
 			$target = $nt->getText();
 			$out->addSubtitle( $this->contributionsSub( $userObj ) );
 			$out->setHTMLTitle( $this->msg(
@@ -109,12 +122,6 @@ class SpecialContributions extends IncludableSpecialPage {
 			if ( !IP::isValidRange( $target ) ) {
 				$this->getSkin()->setRelevantUser( $userObj );
 			}
-		} else {
-			$out->addSubtitle( $this->msg( 'sp-contributions-newbies-sub' ) );
-			$out->setHTMLTitle( $this->msg(
-				'pagetitle',
-				$this->msg( 'sp-contributions-newbies-title' )->plain()
-			)->inContentLanguage() );
 		}
 
 		$ns = $request->getVal( 'namespace', null );
@@ -220,7 +227,8 @@ class SpecialContributions extends IncludableSpecialPage {
 				$out->addWikiMsg( 'nocontribs', $target );
 			} else {
 				# Show a message about replica DB lag, if applicable
-				$lag = wfGetLB()->safeGetLag( $pager->getDatabase() );
+				$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
+				$lag = $lb->safeGetLag( $pager->getDatabase() );
 				if ( $lag > 0 ) {
 					$out->showLagWarning( $lag );
 				}
@@ -495,6 +503,14 @@ class SpecialContributions extends IncludableSpecialPage {
 			$this->opts['hideMinor'] = false;
 		}
 
+		// Modules required only for the form
+		$this->getOutput()->addModules( [
+			'mediawiki.userSuggest',
+			'mediawiki.special.contributions',
+		] );
+		$this->getOutput()->addModuleStyles( 'mediawiki.widgets.DateInputWidget.styles' );
+		$this->getOutput()->enableOOUI();
+
 		$form = Html::openElement(
 			'form',
 			[
@@ -536,13 +552,11 @@ class SpecialContributions extends IncludableSpecialPage {
 			$filterSelection = Html::rawElement(
 				'div',
 				[],
-				implode( '&#160;', $tagFilter )
+				implode( "\u{00A0}", $tagFilter )
 			);
 		} else {
 			$filterSelection = Html::rawElement( 'div', [], '' );
 		}
-
-		$this->getOutput()->addModules( 'mediawiki.userSuggest' );
 
 		$labelNewbies = Xml::radioLabel(
 			$this->msg( 'sp-contributions-newbies' )->text(),
@@ -591,7 +605,7 @@ class SpecialContributions extends IncludableSpecialPage {
 				$this->msg( 'namespace' )->text(),
 				'namespace',
 				''
-			) . '&#160;' .
+			) . "\u{00A0}" .
 			Html::namespaceSelector(
 				[ 'selected' => $this->opts['namespace'], 'all' => '' ],
 				[
@@ -599,7 +613,7 @@ class SpecialContributions extends IncludableSpecialPage {
 					'id' => 'namespace',
 					'class' => 'namespaceselector',
 				]
-			) . '&#160;' .
+			) . "\u{00A0}" .
 				Html::rawElement(
 					'span',
 					[ 'class' => 'mw-input-with-label' ],
@@ -612,7 +626,7 @@ class SpecialContributions extends IncludableSpecialPage {
 							'title' => $this->msg( 'tooltip-invert' )->text(),
 							'class' => 'mw-input'
 						]
-					) . '&#160;'
+					) . "\u{00A0}"
 				) .
 				Html::rawElement( 'span', [ 'class' => 'mw-input-with-label' ],
 					Xml::checkLabel(
@@ -624,7 +638,7 @@ class SpecialContributions extends IncludableSpecialPage {
 							'title' => $this->msg( 'tooltip-namespace_association' )->text(),
 							'class' => 'mw-input'
 						]
-					) . '&#160;'
+					) . "\u{00A0}"
 				)
 		);
 

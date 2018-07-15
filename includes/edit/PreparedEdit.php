@@ -27,6 +27,8 @@ use ParserOutput;
 /**
  * Represents information returned by WikiPage::prepareContentForEdit()
  *
+ * @deprecated since 1.32, use DerivedPageDataUpdater instead.
+ *
  * @since 1.30
  */
 class PreparedEdit {
@@ -87,27 +89,4 @@ class PreparedEdit {
 	 */
 	public $oldContent;
 
-	/**
-	 * $newContent in text form
-	 *
-	 * @var string
-	 * @deprecated since 1.21
-	 */
-	public $newText;
-
-	/**
-	 * $oldContent in text from
-	 *
-	 * @var string
-	 * @deprecated since 1.21
-	 */
-	public $oldText;
-
-	/**
-	 * $pstContent in text form
-	 *
-	 * @var string
-	 * @deprecated since 1.21
-	 */
-	public $pst;
 }

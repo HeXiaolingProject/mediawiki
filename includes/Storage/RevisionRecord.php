@@ -48,8 +48,9 @@ abstract class RevisionRecord {
 	const DELETED_COMMENT = 2;
 	const DELETED_USER = 4;
 	const DELETED_RESTRICTED = 8;
-	const SUPPRESSED_USER = 12; // convenience
-	const SUPPRESSED_ALL = 15; // convenience
+	const SUPPRESSED_USER = self::DELETED_USER | self::DELETED_RESTRICTED; // convenience
+	const SUPPRESSED_ALL = self::DELETED_TEXT | self::DELETED_COMMENT | self::DELETED_USER |
+		self::DELETED_RESTRICTED; // convenience
 
 	// Audience options for accessors
 	const FOR_PUBLIC = 1;
@@ -197,6 +198,17 @@ abstract class RevisionRecord {
 	}
 
 	/**
+	 * Returns whether the given slot is defined in this revision.
+	 *
+	 * @param string $role The role name of the desired slot
+	 *
+	 * @return bool
+	 */
+	public function hasSlot( $role ) {
+		return $this->mSlots->hasSlot( $role );
+	}
+
+	/**
 	 * Returns the slot names (roles) of all slots present in this revision.
 	 * getContent() will succeed only for the names returned by this method.
 	 *
@@ -204,6 +216,48 @@ abstract class RevisionRecord {
 	 */
 	public function getSlotRoles() {
 		return $this->mSlots->getSlotRoles();
+	}
+
+	/**
+	 * Returns the slots defined for this revision.
+	 *
+	 * @return RevisionSlots
+	 */
+	public function getSlots() {
+		return $this->mSlots;
+	}
+
+	/**
+	 * Returns the slots that originate in this revision.
+	 *
+	 * Note that this does not include any slots inherited from some earlier revision,
+	 * even if they are different from the slots in the immediate parent revision.
+	 * This is the case for rollbacks: slots of a rollback revision are inherited from
+	 * the rollback target, and are different from the slots in the parent revision,
+	 * which was rolled back.
+	 *
+	 * To find all slots modified by this revision against its immediate parent
+	 * revision, use RevisionSlotsUpdate::newFromRevisionSlots().
+	 *
+	 * @return RevisionSlots
+	 */
+	public function getOriginalSlots() {
+		return new RevisionSlots( $this->mSlots->getOriginalSlots() );
+	}
+
+	/**
+	 * Returns slots inherited from some previous revision.
+	 *
+	 * "Inherited" slots are all slots that do not originate in this revision.
+	 * Note that these slots may still differ from the one in the parent revision.
+	 * This is the case for rollbacks: slots of a rollback revision are inherited from
+	 * the rollback target, and are different from the slots in the parent revision,
+	 * which was rolled back.
+	 *
+	 * @return RevisionSlots
+	 */
+	public function getInheritedSlots() {
+		return new RevisionSlots( $this->mSlots->getInheritedSlots() );
 	}
 
 	/**
@@ -462,7 +516,7 @@ abstract class RevisionRecord {
 			$permissionlist = implode( ', ', $permissions );
 			if ( $title === null ) {
 				wfDebug( "Checking for $permissionlist due to $field match on $bitfield\n" );
-				return call_user_func_array( [ $user, 'isAllowedAny' ], $permissions );
+				return $user->isAllowedAny( ...$permissions );
 			} else {
 				$text = $title->getPrefixedText();
 				wfDebug( "Checking for $permissionlist on $text due to $field match on $bitfield\n" );

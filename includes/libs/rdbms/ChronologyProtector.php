@@ -43,6 +43,8 @@ class ChronologyProtector implements LoggerAwareInterface {
 	protected $key;
 	/** @var string Hash of client parameters */
 	protected $clientId;
+	/** @var string[] Map of client information fields for logging */
+	protected $clientLogInfo;
 	/** @var int|null Expected minimum index of the last write to the position store */
 	protected $waitForPosIndex;
 	/** @var int Max seconds to wait on positions to appear */
@@ -63,25 +65,44 @@ class ChronologyProtector implements LoggerAwareInterface {
 
 	/** @var int Seconds to store positions */
 	const POSITION_TTL = 60;
+	/** @var int Seconds to store position write index cookies (safely less than POSITION_TTL) */
+	const POSITION_COOKIE_TTL = 10;
 	/** @var int Max time to wait for positions to appear */
 	const POS_STORE_WAIT_TIMEOUT = 5;
 
 	/**
 	 * @param BagOStuff $store
-	 * @param array[] $client Map of (ip: <IP>, agent: <user-agent>)
+	 * @param array[] $client Map of (ip: <IP>, agent: <user-agent> [, clientId: <hash>] )
 	 * @param int|null $posIndex Write counter index [optional]
 	 * @since 1.27
 	 */
 	public function __construct( BagOStuff $store, array $client, $posIndex = null ) {
 		$this->store = $store;
-		$this->clientId = md5( $client['ip'] . "\n" . $client['agent'] );
-		$this->key = $store->makeGlobalKey( __CLASS__, $this->clientId, 'v1' );
+		$this->clientId = isset( $client['clientId'] )
+			? $client['clientId']
+			: md5( $client['ip'] . "\n" . $client['agent'] );
+		$this->key = $store->makeGlobalKey( __CLASS__, $this->clientId, 'v2' );
 		$this->waitForPosIndex = $posIndex;
+
+		$this->clientLogInfo = [
+			'clientIP' => $client['ip'],
+			'clientAgent' => $client['agent'],
+			'clientId' => $client['clientId'] ?? null
+		];
+
 		$this->logger = new NullLogger();
 	}
 
 	public function setLogger( LoggerInterface $logger ) {
 		$this->logger = $logger;
+	}
+
+	/**
+	 * @return string Client ID hash
+	 * @since 1.32
+	 */
+	public function getClientId() {
+		return $this->clientId;
 	}
 
 	/**
@@ -124,7 +145,7 @@ class ChronologyProtector implements LoggerAwareInterface {
 			$this->startupPositions[$masterName] instanceof DBMasterPos
 		) {
 			$pos = $this->startupPositions[$masterName];
-			$this->logger->info( __METHOD__ . ": LB for '$masterName' set to pos $pos\n" );
+			$this->logger->debug( __METHOD__ . ": LB for '$masterName' set to pos $pos\n" );
 			$lb->waitFor( $pos );
 		}
 	}
@@ -148,11 +169,11 @@ class ChronologyProtector implements LoggerAwareInterface {
 		if ( $lb->getServerCount() > 1 ) {
 			$pos = $lb->getMasterPos();
 			if ( $pos ) {
-				$this->logger->info( __METHOD__ . ": LB for '$masterName' has pos $pos\n" );
+				$this->logger->debug( __METHOD__ . ": LB for '$masterName' has pos $pos\n" );
 				$this->shutdownPositions[$masterName] = $pos;
 			}
 		} else {
-			$this->logger->info( __METHOD__ . ": DB '$masterName' touched\n" );
+			$this->logger->debug( __METHOD__ . ": DB '$masterName' touched\n" );
 		}
 		$this->shutdownTouchDBs[$masterName] = 1;
 	}
@@ -186,17 +207,18 @@ class ChronologyProtector implements LoggerAwareInterface {
 			return []; // nothing to save
 		}
 
-		$this->logger->info( __METHOD__ . ": saving master pos for " .
+		$this->logger->debug( __METHOD__ . ": saving master pos for " .
 			implode( ', ', array_keys( $this->shutdownPositions ) ) . "\n"
 		);
 
-		// CP-protected writes should overwhemingly go to the master datacenter, so get DC-local
-		// lock to merge the values. Use a DC-local get() and a synchronous all-DC set(). This
-		// makes it possible for the BagOStuff class to write in parallel to all DCs with one RTT.
+		// CP-protected writes should overwhelmingly go to the master datacenter, so use a
+		// DC-local lock to merge the values. Use a DC-local get() and a synchronous all-DC
+		// set(). This makes it possible for the BagOStuff class to write in parallel to all
+		// DCs with one RTT. The use of WRITE_SYNC avoids needing READ_LATEST for the get().
 		if ( $store->lock( $this->key, 3 ) ) {
 			if ( $workCallback ) {
-				// Let the store run the work before blocking on a replication sync barrier. By the
-				// time it's done with the work, the barrier should be fast if replication caught up.
+				// Let the store run the work before blocking on a replication sync barrier.
+				// If replication caught up while the work finished, the barrier will be fast.
 				$store->addBusyCallback( $workCallback );
 			}
 			$ok = $store->set(
@@ -212,10 +234,10 @@ class ChronologyProtector implements LoggerAwareInterface {
 			$store->unlock( $this->key );
 		} else {
 			$ok = false;
-			$cpIndex = null; // nothing saved
 		}
 
 		if ( !$ok ) {
+			$cpIndex = null; // nothing saved
 			$bouncedPositions = $this->shutdownPositions;
 			// Raced out too many times or stash is down
 			$this->logger->warning( __METHOD__ . ": failed to save master pos for " .
@@ -269,14 +291,16 @@ class ChronologyProtector implements LoggerAwareInterface {
 			// already be expired and thus treated as non-existing, maintaining correctness.
 			if ( $this->waitForPosIndex > 0 ) {
 				$data = null;
+				$indexReached = null; // highest index reached in the position store
 				$loop = new WaitConditionLoop(
-					function () use ( &$data ) {
+					function () use ( &$data, &$indexReached ) {
 						$data = $this->store->get( $this->key );
 						if ( !is_array( $data ) ) {
 							return WaitConditionLoop::CONDITION_CONTINUE; // not found yet
 						} elseif ( !isset( $data['writeIndex'] ) ) {
 							return WaitConditionLoop::CONDITION_REACHED; // b/c
 						}
+						$indexReached = max( $data['writeIndex'], $indexReached );
 
 						return ( $data['writeIndex'] >= $this->waitForPosIndex )
 							? WaitConditionLoop::CONDITION_REACHED
@@ -288,21 +312,32 @@ class ChronologyProtector implements LoggerAwareInterface {
 				$waitedMs = $loop->getLastWaitTime() * 1e3;
 
 				if ( $result == $loop::CONDITION_REACHED ) {
-					$msg = "expected and found pos index {$this->waitForPosIndex} ({$waitedMs}ms)";
-					$this->logger->debug( $msg );
+					$this->logger->debug(
+						__METHOD__ . ": expected and found position index.",
+						[
+							'cpPosIndex' => $this->waitForPosIndex,
+							'waitTimeMs' => $waitedMs
+						] + $this->clientLogInfo
+					);
 				} else {
-					$msg = "expected but missed pos index {$this->waitForPosIndex} ({$waitedMs}ms)";
-					$this->logger->info( $msg );
+					$this->logger->warning(
+						__METHOD__ . ": expected but failed to find position index.",
+						[
+							'cpPosIndex' => $this->waitForPosIndex,
+							'indexReached' => $indexReached,
+							'waitTimeMs' => $waitedMs
+						] + $this->clientLogInfo
+					);
 				}
 			} else {
 				$data = $this->store->get( $this->key );
 			}
 
 			$this->startupPositions = $data ? $data['positions'] : [];
-			$this->logger->info( __METHOD__ . ": key is {$this->key} (read)\n" );
+			$this->logger->debug( __METHOD__ . ": key is {$this->key} (read)\n" );
 		} else {
 			$this->startupPositions = [];
-			$this->logger->info( __METHOD__ . ": key is {$this->key} (unread)\n" );
+			$this->logger->debug( __METHOD__ . ": key is {$this->key} (unread)\n" );
 		}
 	}
 
@@ -314,7 +349,7 @@ class ChronologyProtector implements LoggerAwareInterface {
 	 */
 	protected function mergePositions( $curValue, array $shutdownPositions, &$cpIndex = null ) {
 		/** @var DBMasterPos[] $curPositions */
-		$curPositions = isset( $curValue['positions'] ) ? $curValue['positions'] : [];
+		$curPositions = $curValue['positions'] ?? [];
 		// Use the newest positions for each DB master
 		foreach ( $shutdownPositions as $db => $pos ) {
 			if (
@@ -326,7 +361,7 @@ class ChronologyProtector implements LoggerAwareInterface {
 			}
 		}
 
-		$cpIndex = isset( $curValue['writeIndex'] ) ? $curValue['writeIndex'] : 0;
+		$cpIndex = $curValue['writeIndex'] ?? 0;
 
 		return [
 			'positions' => $curPositions,

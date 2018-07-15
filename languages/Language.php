@@ -154,9 +154,9 @@ class Language {
 	/**
 	 * Unicode directional formatting characters, for embedBidi()
 	 */
-	static private $lre = "\xE2\x80\xAA"; // U+202A LEFT-TO-RIGHT EMBEDDING
-	static private $rle = "\xE2\x80\xAB"; // U+202B RIGHT-TO-LEFT EMBEDDING
-	static private $pdf = "\xE2\x80\xAC"; // U+202C POP DIRECTIONAL FORMATTING
+	static private $lre = "\u{202A}"; // U+202A LEFT-TO-RIGHT EMBEDDING
+	static private $rle = "\u{202B}"; // U+202B RIGHT-TO-LEFT EMBEDDING
+	static private $pdf = "\u{202C}"; // U+202C POP DIRECTIONAL FORMATTING
 
 	/**
 	 * Directionality test regex for embedBidi(). Matches the first strong directionality codepoint:
@@ -188,9 +188,7 @@ class Language {
 		}
 
 		// get the language object to process
-		$langObj = isset( self::$mLangObjCache[$code] )
-			? self::$mLangObjCache[$code]
-			: self::newFromCode( $code );
+		$langObj = self::$mLangObjCache[$code] ?? self::newFromCode( $code );
 
 		// merge the language object in to get it up front in the cache
 		self::$mLangObjCache = array_merge( [ $code => $langObj ], self::$mLangObjCache );
@@ -222,7 +220,8 @@ class Language {
 
 		// Check if there is a language class for the code
 		$class = self::classFromCode( $code, $fallback );
-		if ( class_exists( $class ) ) {
+		// LanguageCode does not inherit Language
+		if ( class_exists( $class ) && is_a( $class, 'Language', true ) ) {
 			$lang = new $class;
 			return $lang;
 		}
@@ -273,7 +272,7 @@ class Language {
 	 * language, script or variant codes actually exist in the repositories.
 	 *
 	 * Based on regexes by Mark Davis of the Unicode Consortium:
-	 * http://unicode.org/repos/cldr/trunk/tools/java/org/unicode/cldr/util/data/langtagRegex.txt
+	 * https://www.unicode.org/repos/cldr/trunk/tools/java/org/unicode/cldr/util/data/langtagRegex.txt
 	 *
 	 * @param string $code
 	 * @param bool $lenient Whether to allow '_' as separator. The default is only '-'.
@@ -542,7 +541,7 @@ class Language {
 	 */
 	public function getNsText( $index ) {
 		$ns = $this->getNamespaces();
-		return isset( $ns[$index] ) ? $ns[$index] : false;
+		return $ns[$index] ?? false;
 	}
 
 	/**
@@ -577,7 +576,7 @@ class Language {
 		$ns = $wgExtraGenderNamespaces +
 			(array)self::$dataCache->getItem( $this->mCode, 'namespaceGenderAliases' );
 
-		return isset( $ns[$index][$gender] ) ? $ns[$index][$gender] : $this->getNsText( $index );
+		return $ns[$index][$gender] ?? $this->getNsText( $index );
 	}
 
 	/**
@@ -613,7 +612,7 @@ class Language {
 	function getLocalNsIndex( $text ) {
 		$lctext = $this->lc( $text );
 		$ids = $this->getNamespaceIds();
-		return isset( $ids[$lctext] ) ? $ids[$lctext] : false;
+		return $ids[$lctext] ?? false;
 	}
 
 	/**
@@ -700,7 +699,7 @@ class Language {
 			return $ns;
 		}
 		$ids = $this->getNamespaceIds();
-		return isset( $ids[$lctext] ) ? $ids[$lctext] : false;
+		return $ids[$lctext] ?? false;
 	}
 
 	/**
@@ -792,12 +791,12 @@ class Language {
 	/**
 	 * Get an array of language names, indexed by code.
 	 * @param null|string $inLanguage Code of language in which to return the names
-	 *		Use null for autonyms (native names)
+	 * 		Use null for autonyms (native names)
 	 * @param string $include One of:
-	 *		'all' all available languages
-	 *		'mw' only if the language is defined in MediaWiki or wgExtraLanguageNames (default)
-	 *		'mwfile' only if the language is in 'mw' *and* has a message file
-	 * @return array Language code => language name
+	 * 		'all' all available languages
+	 * 		'mw' only if the language is defined in MediaWiki or wgExtraLanguageNames (default)
+	 * 		'mwfile' only if the language is in 'mw' *and* has a message file
+	 * @return array Language code => language name (sorted by key)
 	 * @since 1.20
 	 */
 	public static function fetchLanguageNames( $inLanguage = null, $include = 'mw' ) {
@@ -823,7 +822,7 @@ class Language {
 	 *		'all' all available languages
 	 *		'mw' only if the language is defined in MediaWiki or wgExtraLanguageNames (default)
 	 *		'mwfile' only if the language is in 'mw' *and* has a message file
-	 * @return array Language code => language name
+	 * @return array Language code => language name (sorted by key)
 	 */
 	private static function fetchLanguageNamesUncached( $inLanguage = null, $include = 'mw' ) {
 		global $wgExtraLanguageNames, $wgUsePigLatinVariant;
@@ -1091,7 +1090,7 @@ class Language {
 	 * @param string $ts 14-character timestamp
 	 *      YYYYMMDDHHMMSS
 	 *      01234567890123
-	 * @param DateTimeZone $zone Timezone of $ts
+	 * @param DateTimeZone|null $zone Timezone of $ts
 	 * @param int &$ttl The amount of time (in seconds) the output may be cached for.
 	 * Only makes sense if $ts is the current time.
 	 * @todo handling of "o" format character for Iranian, Hebrew, Hijri & Thai?
@@ -1884,6 +1883,14 @@ class Language {
 			# Add 543 years to the Gregorian calendar
 			# Months and days are identical
 			$gy_offset = $gy + 543;
+			# fix for dates between 1912 and 1941
+			# https://en.wikipedia.org/?oldid=836596673#New_year
+			if ( $gy >= 1912 && $gy <= 1940 ) {
+				if ( $gm <= 3 ) {
+					$gy_offset--;
+				}
+				$gm = ( $gm - 3 ) % 12;
+			}
 		} elseif ( ( !strcmp( $cName, 'minguo' ) ) || !strcmp( $cName, 'juche' ) ) {
 			# Minguo dates
 			# Deduct 1911 years from the Gregorian calendar
@@ -1951,8 +1958,8 @@ class Language {
 	 * Gets directionality of the first strongly directional codepoint, for embedBidi()
 	 *
 	 * This is the rule the BIDI algorithm uses to determine the directionality of
-	 * paragraphs ( http://unicode.org/reports/tr9/#The_Paragraph_Level ) and
-	 * FSI isolates ( http://unicode.org/reports/tr9/#Explicit_Directional_Isolates ).
+	 * paragraphs ( https://www.unicode.org/reports/tr9/#The_Paragraph_Level ) and
+	 * FSI isolates ( https://www.unicode.org/reports/tr9/#Explicit_Directional_Isolates ).
 	 *
 	 * TODO: Does not handle BIDI control characters inside the text.
 	 * TODO: Does not handle unallocated characters.
@@ -2140,7 +2147,7 @@ class Language {
 			return $ts;
 		}
 
-		MediaWiki\suppressWarnings(); // E_STRICT system time bitching
+		Wikimedia\suppressWarnings(); // E_STRICT system time bitching
 		# Generate an adjusted date; take advantage of the fact that mktime
 		# will normalize out-of-range values so we don't have to split $minDiff
 		# into hours and minutes.
@@ -2153,7 +2160,7 @@ class Language {
 			(int)substr( $ts, 0, 4 ) ); # Year
 
 		$date = date( 'YmdHis', $t );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 
 		return $date;
 	}
@@ -2605,9 +2612,9 @@ class Language {
 		# *input* string. We just ignore those too.
 		# REF: https://bugs.php.net/bug.php?id=37166
 		# REF: https://phabricator.wikimedia.org/T18885
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$text = iconv( $in, $out . '//IGNORE', $string );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 		return $text;
 	}
 
@@ -2917,33 +2924,33 @@ class Language {
 			if ( $code < 0xac00 || 0xd7a4 <= $code ) {
 				return $matches[1];
 			} elseif ( $code < 0xb098 ) {
-				return "\xe3\x84\xb1";
+				return "\u{3131}";
 			} elseif ( $code < 0xb2e4 ) {
-				return "\xe3\x84\xb4";
+				return "\u{3134}";
 			} elseif ( $code < 0xb77c ) {
-				return "\xe3\x84\xb7";
+				return "\u{3137}";
 			} elseif ( $code < 0xb9c8 ) {
-				return "\xe3\x84\xb9";
+				return "\u{3139}";
 			} elseif ( $code < 0xbc14 ) {
-				return "\xe3\x85\x81";
+				return "\u{3141}";
 			} elseif ( $code < 0xc0ac ) {
-				return "\xe3\x85\x82";
+				return "\u{3142}";
 			} elseif ( $code < 0xc544 ) {
-				return "\xe3\x85\x85";
+				return "\u{3145}";
 			} elseif ( $code < 0xc790 ) {
-				return "\xe3\x85\x87";
+				return "\u{3147}";
 			} elseif ( $code < 0xcc28 ) {
-				return "\xe3\x85\x88";
+				return "\u{3148}";
 			} elseif ( $code < 0xce74 ) {
-				return "\xe3\x85\x8a";
+				return "\u{314A}";
 			} elseif ( $code < 0xd0c0 ) {
-				return "\xe3\x85\x8b";
+				return "\u{314B}";
 			} elseif ( $code < 0xd30c ) {
-				return "\xe3\x85\x8c";
+				return "\u{314C}";
 			} elseif ( $code < 0xd558 ) {
-				return "\xe3\x85\x8d";
+				return "\u{314D}";
 			} else {
-				return "\xe3\x85\x8e";
+				return "\u{314E}";
 			}
 		} else {
 			return '';
@@ -2954,6 +2961,7 @@ class Language {
 	 * @deprecated No-op since 1.28
 	 */
 	function initEncoding() {
+		wfDeprecated( __METHOD__, '1.28' );
 		// No-op.
 	}
 
@@ -2963,6 +2971,7 @@ class Language {
 	 * @deprecated No-op since 1.28
 	 */
 	function recodeForEdit( $s ) {
+		wfDeprecated( __METHOD__, '1.28' );
 		return $s;
 	}
 
@@ -2972,6 +2981,7 @@ class Language {
 	 * @deprecated No-op since 1.28
 	 */
 	function recodeInput( $s ) {
+		wfDeprecated( __METHOD__, '1.28' );
 		return $s;
 	}
 
@@ -2990,8 +3000,8 @@ class Language {
 		global $wgAllUnicodeFixes;
 		$s = UtfNormal\Validator::cleanUp( $s );
 		if ( $wgAllUnicodeFixes ) {
-			$s = $this->transformUsingPairFile( 'normalize-ar.ser', $s );
-			$s = $this->transformUsingPairFile( 'normalize-ml.ser', $s );
+			$s = $this->transformUsingPairFile( 'normalize-ar.php', $s );
+			$s = $this->transformUsingPairFile( 'normalize-ml.php', $s );
 		}
 
 		return $s;
@@ -3011,12 +3021,10 @@ class Language {
 	 * @throws MWException
 	 * @return string
 	 */
-	function transformUsingPairFile( $file, $string ) {
+	protected function transformUsingPairFile( $file, $string ) {
 		if ( !isset( $this->transformData[$file] ) ) {
-			$data = wfGetPrecompiledData( $file );
-			if ( $data === false ) {
-				throw new MWException( __METHOD__ . ": The transformation file $file is missing" );
-			}
+			global $IP;
+			$data = require "$IP/languages/data/{$file}";
 			$this->transformData[$file] = new ReplacementArray( $data );
 		}
 		return $this->transformData[$file]->replace( $string );
@@ -3092,8 +3100,8 @@ class Language {
 	 * @return string
 	 */
 	function getDirMark( $opposite = false ) {
-		$lrm = "\xE2\x80\x8E"; # LEFT-TO-RIGHT MARK, commonly abbreviated LRM
-		$rlm = "\xE2\x80\x8F"; # RIGHT-TO-LEFT MARK, commonly abbreviated RLM
+		$lrm = "\u{200E}"; # LEFT-TO-RIGHT MARK, commonly abbreviated LRM
+		$rlm = "\u{200F}"; # RIGHT-TO-LEFT MARK, commonly abbreviated RLM
 		if ( $opposite ) {
 			return $this->isRTL() ? $lrm : $rlm;
 		}
@@ -3156,7 +3164,7 @@ class Language {
 			return;
 		}
 		$this->mMagicHookDone = true;
-		Hooks::run( 'LanguageGetMagic', [ &$this->mMagicExtensions, $this->getCode() ] );
+		Hooks::run( 'LanguageGetMagic', [ &$this->mMagicExtensions, $this->getCode() ], '1.16' );
 	}
 
 	/**
@@ -3212,7 +3220,7 @@ class Language {
 			$this->mExtendedSpecialPageAliases =
 				self::$dataCache->getItem( $this->mCode, 'specialPageAliases' );
 			Hooks::run( 'LanguageGetSpecialPageAliases',
-				[ &$this->mExtendedSpecialPageAliases, $this->getCode() ] );
+				[ &$this->mExtendedSpecialPageAliases, $this->getCode() ], '1.16' );
 		}
 
 		return $this->mExtendedSpecialPageAliases;
@@ -3472,27 +3480,104 @@ class Language {
 	}
 
 	/**
-	 * Truncate a string to a specified length in bytes, appending an optional
-	 * string (e.g. for ellipses)
+	 * This method is deprecated since 1.31 and kept as alias for truncateForDatabase, which
+	 * has replaced it. This method provides truncation suitable for DB.
 	 *
 	 * The database offers limited byte lengths for some columns in the database;
 	 * multi-byte character sets mean we need to ensure that only whole characters
-	 * are included, otherwise broken characters can be passed to the user
+	 * are included, otherwise broken characters can be passed to the user.
 	 *
-	 * If $length is negative, the string will be truncated from the beginning
+	 * @deprecated since 1.31, use truncateForDatabase or truncateForVisual as appropriate.
 	 *
 	 * @param string $string String to truncate
-	 * @param int $length Maximum length (including ellipses)
+	 * @param int $length Maximum length (including ellipsis)
 	 * @param string $ellipsis String to append to the truncated text
 	 * @param bool $adjustLength Subtract length of ellipsis from $length.
-	 *	$adjustLength was introduced in 1.18, before that behaved as if false.
+	 * 	$adjustLength was introduced in 1.18, before that behaved as if false.
 	 * @return string
 	 */
 	function truncate( $string, $length, $ellipsis = '...', $adjustLength = true ) {
+		wfDeprecated( __METHOD__, '1.31' );
+		return $this->truncateForDatabase( $string, $length, $ellipsis, $adjustLength );
+	}
+
+	/**
+	 * Truncate a string to a specified length in bytes, appending an optional
+	 * string (e.g. for ellipsis)
+	 *
+	 * If $length is negative, the string will be truncated from the beginning
+	 *
+	 * @since 1.31
+	 *
+	 * @param string $string String to truncate
+	 * @param int $length Maximum length in bytes
+	 * @param string $ellipsis String to append to the end of truncated text
+	 * @param bool $adjustLength Subtract length of ellipsis from $length
+	 *
+	 * @return string
+	 */
+	function truncateForDatabase( $string, $length, $ellipsis = '...', $adjustLength = true ) {
+		return $this->truncateInternal(
+			$string, $length, $ellipsis, $adjustLength, 'strlen', 'substr'
+		);
+	}
+
+	/**
+	 * Truncate a string to a specified number of characters, appending an optional
+	 * string (e.g. for ellipsis).
+	 *
+	 * This provides multibyte version of truncate() method of this class, suitable for truncation
+	 * based on number of characters, instead of number of bytes.
+	 *
+	 * If $length is negative, the string will be truncated from the beginning.
+	 *
+	 * @since 1.31
+	 *
+	 * @param string $string String to truncate
+	 * @param int $length Maximum number of characters
+	 * @param string $ellipsis String to append to the end of truncated text
+	 * @param bool $adjustLength Subtract length of ellipsis from $length
+	 *
+	 * @return string
+	 */
+	function truncateForVisual( $string, $length, $ellipsis = '...', $adjustLength = true ) {
+		// Passing encoding to mb_strlen and mb_substr is optional.
+		// Encoding defaults to mb_internal_encoding(), which is set to UTF-8 in Setup.php, so
+		// explicit specification of encoding is skipped.
+		// Note: Both multibyte methods are callables invoked in truncateInternal.
+		return $this->truncateInternal(
+			$string, $length, $ellipsis, $adjustLength, 'mb_strlen', 'mb_substr'
+		);
+	}
+
+	/**
+	 * Internal method used for truncation. This method abstracts text truncation into
+	 * one common method, allowing users to provide length measurement function and
+	 * function for finding substring.
+	 *
+	 * For usages, see truncateForDatabase and truncateForVisual.
+	 *
+	 * @param string $string String to truncate
+	 * @param int $length Maximum length of final text
+	 * @param string $ellipsis String to append to the end of truncated text
+	 * @param bool $adjustLength Subtract length of ellipsis from $length
+	 * @param callable $measureLength Callable function used for determining the length of text
+	 * @param callable $getSubstring Callable function used for getting the substrings
+	 *
+	 * @return string
+	 */
+	private function truncateInternal(
+		$string, $length, $ellipsis, $adjustLength, $measureLength, $getSubstring
+	) {
+		if ( !is_callable( $measureLength ) || !is_callable( $getSubstring ) ) {
+			throw new InvalidArgumentException( 'Invalid callback provided' );
+		}
+
 		# Check if there is no need to truncate
-		if ( strlen( $string ) <= abs( $length ) ) {
+		if ( $measureLength( $string ) <= abs( $length ) ) {
 			return $string; // no need to truncate
 		}
+
 		# Use the localized ellipsis character
 		if ( $ellipsis == '...' ) {
 			$ellipsis = wfMessage( 'ellipsis' )->inLanguage( $this )->escaped();
@@ -3500,31 +3585,33 @@ class Language {
 		if ( $length == 0 ) {
 			return $ellipsis; // convention
 		}
+
 		$stringOriginal = $string;
 		# If ellipsis length is >= $length then we can't apply $adjustLength
-		if ( $adjustLength && strlen( $ellipsis ) >= abs( $length ) ) {
+		if ( $adjustLength && $measureLength( $ellipsis ) >= abs( $length ) ) {
 			$string = $ellipsis; // this can be slightly unexpected
 		# Otherwise, truncate and add ellipsis...
 		} else {
-			$eLength = $adjustLength ? strlen( $ellipsis ) : 0;
+			$ellipsisLength = $adjustLength ? $measureLength( $ellipsis ) : 0;
 			if ( $length > 0 ) {
-				$length -= $eLength;
-				$string = substr( $string, 0, $length ); // xyz...
+				$length -= $ellipsisLength;
+				$string = $getSubstring( $string, 0, $length ); // xyz...
 				$string = $this->removeBadCharLast( $string );
 				$string = rtrim( $string );
 				$string = $string . $ellipsis;
 			} else {
-				$length += $eLength;
-				$string = substr( $string, $length ); // ...xyz
+				$length += $ellipsisLength;
+				$string = $getSubstring( $string, $length ); // ...xyz
 				$string = $this->removeBadCharFirst( $string );
 				$string = ltrim( $string );
 				$string = $ellipsis . $string;
 			}
 		}
+
 		# Do not truncate if the ellipsis makes the string longer/equal (T24181).
 		# This check is *not* redundant if $adjustLength, due to the single case where
 		# LEN($ellipsis) > ABS($limit arg); $stringOriginal could be shorter than $string.
-		if ( strlen( $string ) < strlen( $stringOriginal ) ) {
+		if ( $measureLength( $string ) < $measureLength( $stringOriginal ) ) {
 			return $string;
 		} else {
 			return $stringOriginal;
@@ -3884,7 +3971,7 @@ class Language {
 		if ( $gender === 'female' ) {
 			return $forms[1];
 		}
-		return isset( $forms[2] ) ? $forms[2] : $forms[0];
+		return $forms[2] ?? $forms[0];
 	}
 
 	/**
@@ -3998,7 +4085,7 @@ class Language {
 	 * match up with it.
 	 *
 	 * @param string $str The validated block duration in English
-	 * @param User $user User object to use timezone from or null for $wgUser
+	 * @param User|null $user User object to use timezone from or null for $wgUser
 	 * @param int $now Current timestamp, for formatting relative block durations
 	 * @return string Somehow translated block duration
 	 * @see LanguageFi.php for example implementation
@@ -4071,6 +4158,18 @@ class Language {
 	}
 
 	/**
+	 * convert text to a variant
+	 *
+	 * @param string $text text to convert
+	 * @param string|bool $variant variant to convert to, or false to use the user's preferred
+	 *      variant (if logged in), or the project default variant
+	 * @return string the converted string
+	 */
+	public function autoConvert( $text, $variant = false ) {
+		return $this->mConverter->autoConvert( $text, $variant );
+	}
+
+	/**
 	 * convert text to all supported variants
 	 *
 	 * @param string $text
@@ -4103,11 +4202,13 @@ class Language {
 	/**
 	 * Convert a namespace index to a string in the preferred variant
 	 *
-	 * @param int $ns
-	 * @return string
+	 * @param int $ns namespace index (https://www.mediawiki.org/wiki/Manual:Namespace)
+	 * @param string|null $variant variant to convert to, or null to use the user's preferred
+	 *      variant (if logged in), or the project default variant
+	 * @return string a string representation of the namespace
 	 */
-	public function convertNamespace( $ns ) {
-		return $this->mConverter->convertNamespace( $ns );
+	public function convertNamespace( $ns, $variant = null ) {
+		return $this->mConverter->convertNamespace( $ns, $variant );
 	}
 
 	/**
@@ -4233,13 +4334,18 @@ class Language {
 	 * the "raw" tag (-{R| }-) to prevent conversion.
 	 *
 	 * This function is called "markNoConversion" for historical
-	 * reasons.
+	 * reasons *BUT DIFFERS SIGNIFICANTLY* from
+	 * LanguageConverter::markNoConversion(), with which it is easily
+	 * confused.
 	 *
 	 * @param string $text Text to be used for external link
 	 * @param bool $noParse Wrap it without confirming it's a real URL first
 	 * @return string The tagged text
+	 * @deprecated since 1.32, use LanguageConverter::markNoConversion()
+	 *  instead.
 	 */
 	public function markNoConversion( $text, $noParse = false ) {
+		wfDeprecated( __METHOD__, '1.32' );
 		// Excluding protocal-relative URLs may avoid many false positives.
 		if ( $noParse || preg_match( '/^(?:' . wfUrlProtocolsWithoutProtRel() . ')/', $text ) ) {
 			return $this->mConverter->markNoConversion( $text );
@@ -4303,7 +4409,7 @@ class Language {
 	 * @return bool
 	 */
 	public function equals( Language $lang ) {
-		return $lang->getCode() === $this->mCode;
+		return $lang === $this || $lang->getCode() === $this->mCode;
 	}
 
 	/**
@@ -4383,7 +4489,7 @@ class Language {
 	 * @throws MWException
 	 * @return string $prefix . $mangledCode . $suffix
 	 */
-	public static function getFileName( $prefix = 'Language', $code, $suffix = '.php' ) {
+	public static function getFileName( $prefix, $code, $suffix = '.php' ) {
 		if ( !self::isValidBuiltInCode( $code ) ) {
 			throw new MWException( "Invalid language code \"$code\"" );
 		}
@@ -4744,7 +4850,7 @@ class Language {
 	 * @param string $details HTML safe text between brackets
 	 * @param bool $oppositedm Add the direction mark opposite to your
 	 *   language, to display text properly
-	 * @return HTML escaped string
+	 * @return string HTML escaped
 	 */
 	function specialList( $page, $details, $oppositedm = true ) {
 		if ( !$details ) {

@@ -68,7 +68,8 @@ class SqliteUpdater extends DatabaseUpdater {
 			[ 'addField', 'categorylinks', 'cl_collation', 'patch-categorylinks-better-collation.sql' ],
 			[ 'addTable', 'module_deps', 'patch-module_deps.sql' ],
 			[ 'dropIndex', 'archive', 'ar_page_revid', 'patch-archive_kill_ar_page_revid.sql' ],
-			[ 'addIndex', 'archive', 'ar_revid', 'patch-archive_ar_revid.sql' ],
+			[ 'addIndexIfNoneExist',
+				'archive', [ 'ar_revid', 'ar_revid_uniq' ], 'patch-archive_ar_revid.sql' ],
 
 			// 1.18
 			[ 'addIndex', 'user', 'user_email', 'patch-user_email_index.sql' ],
@@ -76,7 +77,6 @@ class SqliteUpdater extends DatabaseUpdater {
 			[ 'addTable', 'user_former_groups', 'patch-user_former_groups.sql' ],
 
 			// 1.19
-			[ 'addIndex', 'logging', 'type_action', 'patch-logging-type-action-index.sql' ],
 			[ 'doMigrateUserOptions' ],
 			[ 'dropField', 'user', 'user_options', 'patch-drop-user_options.sql' ],
 			[ 'addField', 'revision', 'rev_sha1', 'patch-rev_sha1.sql' ],
@@ -190,6 +190,10 @@ class SqliteUpdater extends DatabaseUpdater {
 			[ 'renameIndex', 'user_properties', 'user_properties_user_property', 'PRIMARY', false,
 				'patch-user_properties-fix-pk.sql' ],
 			[ 'addTable', 'comment', 'patch-comment-table.sql' ],
+
+			// This field was added in 1.31, but is put here so it can be used by 'migrateComments'
+			[ 'addField', 'image', 'img_description_id', 'patch-image-img_description_id.sql' ],
+
 			[ 'migrateComments' ],
 			[ 'renameIndex', 'l10n_cache', 'lc_lang_key', 'PRIMARY', false,
 				'patch-l10n_cache-primary-key.sql' ],
@@ -198,8 +202,35 @@ class SqliteUpdater extends DatabaseUpdater {
 			[ 'addTable', 'content', 'patch-content.sql' ],
 			[ 'addTable', 'content_models', 'patch-content_models.sql' ],
 			[ 'addTable', 'slots', 'patch-slots.sql' ],
+			[ 'addField', 'slots', 'slot_origin', 'patch-slot-origin.sql' ],
 			[ 'addTable', 'slot_roles', 'patch-slot_roles.sql' ],
 			[ 'migrateArchiveText' ],
+			[ 'addTable', 'actor', 'patch-actor-table.sql' ],
+			[ 'migrateActors' ],
+			[ 'modifyField', 'revision', 'rev_text_id', 'patch-rev_text_id-default.sql' ],
+			[ 'modifyTable', 'site_stats', 'patch-site_stats-modify.sql' ],
+			[ 'populateArchiveRevId' ],
+			[ 'addIndex', 'recentchanges', 'rc_namespace_title_timestamp',
+				'patch-recentchanges-nttindex.sql' ],
+
+			// 1.32
+			[ 'addTable', 'change_tag_def', 'patch-change_tag_def.sql' ],
+			[ 'populateExternallinksIndex60' ],
+			[ 'modifyfield', 'externallinks', 'el_index_60',
+				'patch-externallinks-el_index_60-drop-default.sql' ],
+			[ 'runMaintenance', DeduplicateArchiveRevId::class, 'maintenance/deduplicateArchiveRevId.php' ],
+			[ 'addField', 'change_tag', 'ct_tag_id', 'patch-change_tag-tag_id.sql' ],
+			[ 'addIndex', 'archive', 'ar_revid_uniq', 'patch-archive-ar_rev_id-unique.sql' ],
+			[ 'populateContentTables' ],
+			[ 'addIndex', 'logging', 'log_type_action', 'patch-logging-log-type-action-index.sql' ],
+			[ 'dropIndex', 'logging', 'type_action', 'patch-logging-drop-type-action-index.sql' ],
+			[ 'renameIndex', 'interwiki', 'iw_prefix', 'PRIMARY', false, 'patch-interwiki-fix-pk.sql' ],
+						[ 'renameIndex', 'page_props', 'pp_page_propname', 'PRIMARY', false,
+				'patch-page_props-fix-pk.sql' ],
+			[ 'renameIndex', 'protected_titles', 'pt_namespace_title', 'PRIMARY', false,
+				'patch-protected_titles-fix-pk.sql' ],
+			[ 'renameIndex', 'site_identifiers', 'site_ids_type', 'PRIMARY', false,
+				'patch-site_identifiers-fix-pk.sql' ],
 		];
 	}
 

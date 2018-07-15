@@ -1,12 +1,12 @@
 /*!
- * OOjs UI v0.25.0
- * https://www.mediawiki.org/wiki/OOjs_UI
+ * OOUI v0.27.5
+ * https://www.mediawiki.org/wiki/OOUI
  *
- * Copyright 2011–2018 OOjs UI Team and other contributors.
+ * Copyright 2011–2018 OOUI Team and other contributors.
  * Released under the MIT license
  * http://oojs.mit-license.org
  *
- * Date: 2018-01-10T00:26:02Z
+ * Date: 2018-07-11T18:13:04Z
  */
 ( function ( OO ) {
 
@@ -18,10 +18,10 @@
  * of the actions.
  *
  * Both actions and action sets are primarily used with {@link OO.ui.Dialog Dialogs}.
- * Please see the [OOjs UI documentation on MediaWiki] [1] for more information
+ * Please see the [OOUI documentation on MediaWiki] [1] for more information
  * and examples.
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Process_Dialogs#Action_sets
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows/Process_Dialogs#Action_sets
  *
  * @class
  * @extends OO.ui.ButtonWidget
@@ -105,7 +105,7 @@ OO.ui.ActionWidget.prototype.getModes = function () {
  * - Special: Special actions are the first visible actions with special flags, such as 'safe' and 'primary', the default special flags. Additional special flags can be configured in subclasses with the static #specialFlags property.
  * - Other: Other actions include all non-special visible actions.
  *
- * Please see the [OOjs UI documentation on MediaWiki][1] for more information.
+ * See the [OOUI documentation on MediaWiki][1] for more information.
  *
  *     @example
  *     // Example: An action set used in a process dialog
@@ -166,7 +166,7 @@ OO.ui.ActionWidget.prototype.getModes = function () {
  *     windowManager.addWindows( [ dialog ] );
  *     windowManager.openWindow( dialog );
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Process_Dialogs#Action_sets
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows/Process_Dialogs#Action_sets
  *
  * @abstract
  * @class
@@ -207,9 +207,9 @@ OO.mixinClass( OO.ui.ActionSet, OO.EventEmitter );
 /**
  * Symbolic name of the flags used to identify special actions. Special actions are displayed in the
  *  header of a {@link OO.ui.ProcessDialog process dialog}.
- *  See the [OOjs UI documentation on MediaWiki][2] for more information and examples.
+ *  See the [OOUI documentation on MediaWiki][2] for more information and examples.
  *
- *  [2]:https://www.mediawiki.org/wiki/OOjs_UI/Windows/Process_Dialogs
+ *  [2]:https://www.mediawiki.org/wiki/OOUI/Windows/Process_Dialogs
  *
  * @abstract
  * @static
@@ -605,9 +605,9 @@ OO.ui.ActionSet.prototype.organize = function () {
  * If the error is a warning, the error interface will include a 'Dismiss' and a 'Continue' button, which will try the
  * process again.
  *
- * For an example of error interfaces, please see the [OOjs UI documentation on MediaWiki][1].
+ * For an example of error interfaces, please see the [OOUI documentation on MediaWiki][1].
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Process_Dialogs#Processes_and_errors
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows/Process_Dialogs#Processes_and_errors
  *
  * @class
  *
@@ -858,9 +858,9 @@ OO.ui.Process.prototype.next = function ( step, context ) {
  * While OO.ui.WindowManager will reuse OO.ui.Window objects, each time a window is
  * opened, a new lifecycle starts.
  *
- * For more information, please see the [OOjs UI documentation on MediaWiki] [1].
+ * For more information, please see the [OOUI documentation on MediaWiki] [1].
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows
  *
  * @class
  *
@@ -989,9 +989,9 @@ OO.ui.WindowInstance.prototype.isClosed = function () {
  * - a `teardown` progress notification is emitted from the `closing` promise
  * - the `closing` promise is resolved. The window is now closed
  *
- * See the [OOjs UI documentation on MediaWiki][1] for more information.
+ * See the [OOUI documentation on MediaWiki][1] for more information.
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Window_managers
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows/Window_managers
  *
  * @class
  * @extends OO.ui.Element
@@ -1034,8 +1034,10 @@ OO.ui.WindowManager = function OoUiWindowManager( config ) {
 	// Initialization
 	this.$element
 		.addClass( 'oo-ui-windowManager' )
-		.attr( 'aria-hidden', true )
 		.toggleClass( 'oo-ui-windowManager-modal', this.modal );
+	if ( this.modal ) {
+		this.$element.attr( 'aria-hidden', true );
+	}
 };
 
 /* Setup */
@@ -1134,8 +1136,16 @@ OO.ui.WindowManager.prototype.onWindowResize = function () {
  * @param {jQuery.Event} e Window resize event
  */
 OO.ui.WindowManager.prototype.afterWindowResize = function () {
+	var currentFocusedElement = document.activeElement;
 	if ( this.currentWindow ) {
 		this.updateWindowSize( this.currentWindow );
+
+		// Restore focus to the original element if it has changed.
+		// When a layout change is made on resize inputs lose focus
+		// on Android (Chrome and Firefox). See T162127.
+		if ( currentFocusedElement !== document.activeElement ) {
+			currentFocusedElement.focus();
+		}
 	}
 };
 
@@ -1209,7 +1219,7 @@ OO.ui.WindowManager.prototype.getSetupDelay = function () {
  * @return {number} Milliseconds to wait
  */
 OO.ui.WindowManager.prototype.getReadyDelay = function () {
-	return 0;
+	return this.modal ? OO.ui.theme.getDialogTransitionDuration() : 0;
 };
 
 /**
@@ -1232,16 +1242,16 @@ OO.ui.WindowManager.prototype.getHoldDelay = function () {
  * @return {number} Milliseconds to wait
  */
 OO.ui.WindowManager.prototype.getTeardownDelay = function () {
-	return this.modal ? 250 : 0;
+	return this.modal ? OO.ui.theme.getDialogTransitionDuration() : 0;
 };
 
 /**
  * Get a window by its symbolic name.
  *
  * If the window is not yet instantiated and its symbolic name is recognized by a factory, it will be
- * instantiated and added to the window manager automatically. Please see the [OOjs UI documentation on MediaWiki][3]
+ * instantiated and added to the window manager automatically. Please see the [OOUI documentation on MediaWiki][3]
  * for more information about using factories.
- * [3]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Window_managers
+ * [3]: https://www.mediawiki.org/wiki/OOUI/Windows/Window_managers
  *
  * @param {string} name Symbolic name of the window
  * @return {jQuery.Promise} Promise resolved with matching window, or rejected with an OO.ui.Error
@@ -1366,7 +1376,6 @@ OO.ui.WindowManager.prototype.openWindow = function ( win, data, lifecycle, comp
 		setTimeout( function () {
 			manager.compatOpened = $.Deferred();
 			win.setup( data ).then( function () {
-				manager.updateWindowSize( win );
 				compatOpening.notify( { state: 'setup' } );
 				setTimeout( function () {
 					win.ready( data ).then( function () {
@@ -1493,8 +1502,8 @@ OO.ui.WindowManager.prototype.closeWindow = function ( win, data ) {
  * Add windows to the window manager.
  *
  * Windows can be added by reference, symbolic name, or explicitly defined symbolic names.
- * See the [OOjs ui documentation on MediaWiki] [2] for examples.
- * [2]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Window_managers
+ * See the [OOUI documentation on MediaWiki] [2] for examples.
+ * [2]: https://www.mediawiki.org/wiki/OOUI/Windows/Window_managers
  *
  * This function can be called in two manners:
  *
@@ -1772,9 +1781,9 @@ OO.ui.WindowManager.prototype.destroy = function () {
  * methods. Note that each {@link OO.ui.Process process} is executed in series, so asynchronous
  * processing can complete. Always assume window processes are executed asynchronously.
  *
- * For more information, please see the [OOjs UI documentation on MediaWiki] [1].
+ * For more information, please see the [OOUI documentation on MediaWiki] [1].
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows
  *
  * @abstract
  * @class
@@ -1803,7 +1812,7 @@ OO.ui.Window = function OoUiWindow( config ) {
 	/**
 	 * Overlay element to use for the `$overlay` configuration option of widgets that support it.
 	 * Things put inside of it are overlaid on top of the window and are not bound to its dimensions.
-	 * See <https://www.mediawiki.org/wiki/OOjs_UI/Concepts#Overlays>.
+	 * See <https://www.mediawiki.org/wiki/OOUI/Concepts#Overlays>.
 	 *
 	 *     MyDialog.prototype.initialize = function () {
 	 *       ...
@@ -2067,9 +2076,10 @@ OO.ui.Window.prototype.getDir = function () {
 /**
  * Get the 'setup' process.
  *
- * The setup process is used to set up a window for use in a particular context,
- * based on the `data` argument. This method is called during the opening phase of the window’s
- * lifecycle.
+ * The setup process is used to set up a window for use in a particular context, based on the `data`
+ * argument. This method is called during the opening phase of the window’s lifecycle (before the
+ * opening animation). You can add elements to the window in this process or set their default
+ * values.
  *
  * Override this method to add additional steps to the ‘setup’ process the parent method provides
  * using the {@link OO.ui.Process#first first} and {@link OO.ui.Process#next next} methods
@@ -2088,9 +2098,10 @@ OO.ui.Window.prototype.getSetupProcess = function () {
 /**
  * Get the ‘ready’ process.
  *
- * The ready process is used to ready a window for use in a particular
- * context, based on the `data` argument. This method is called during the opening phase of
- * the window’s lifecycle, after the window has been {@link #getSetupProcess setup}.
+ * The ready process is used to ready a window for use in a particular context, based on the `data`
+ * argument. This method is called during the opening phase of the window’s lifecycle, after the
+ * window has been {@link #getSetupProcess setup} (after the opening animation). You can focus
+ * elements in the window in this process, or open their dropdowns.
  *
  * Override this method to add additional steps to the ‘ready’ process the parent method
  * provides using the {@link OO.ui.Process#first first} and {@link OO.ui.Process#next next}
@@ -2106,9 +2117,10 @@ OO.ui.Window.prototype.getReadyProcess = function () {
 /**
  * Get the 'hold' process.
  *
- * The hold process is used to keep a window from being used in a particular context,
- * based on the `data` argument. This method is called during the closing phase of the window’s
- * lifecycle.
+ * The hold process is used to keep a window from being used in a particular context, based on the
+ * `data` argument. This method is called during the closing phase of the window’s lifecycle (before
+ * the closing animation). You can close dropdowns of elements in the window in this process, if
+ * they do not get closed automatically.
  *
  * Override this method to add additional steps to the 'hold' process the parent method provides
  * using the {@link OO.ui.Process#first first} and {@link OO.ui.Process#next next} methods
@@ -2124,9 +2136,10 @@ OO.ui.Window.prototype.getHoldProcess = function () {
 /**
  * Get the ‘teardown’ process.
  *
- * The teardown process is used to teardown a window after use. During teardown,
- * user interactions within the window are conveyed and the window is closed, based on the `data`
- * argument. This method is called during the closing phase of the window’s lifecycle.
+ * The teardown process is used to teardown a window after use. During teardown, user interactions
+ * within the window are conveyed and the window is closed, based on the `data` argument. This
+ * method is called during the closing phase of the window’s lifecycle (after the closing
+ * animation). You can remove elements in the window in this process or clear their values.
  *
  * Override this method to add additional steps to the ‘teardown’ process the parent method provides
  * using the {@link OO.ui.Process#first first} and {@link OO.ui.Process#next next} methods
@@ -2337,8 +2350,8 @@ OO.ui.Window.prototype.close = function ( data ) {
 /**
  * Setup window.
  *
- * This is called by OO.ui.WindowManager during window opening, and should not be called directly
- * by other systems.
+ * This is called by OO.ui.WindowManager during window opening (before the animation), and should
+ * not be called directly by other systems.
  *
  * @param {Object} [data] Window opening data
  * @return {jQuery.Promise} Promise resolved when window is setup
@@ -2352,6 +2365,7 @@ OO.ui.Window.prototype.setup = function ( data ) {
 	this.$focusTraps.on( 'focus', this.focusTrapHandler );
 
 	return this.getSetupProcess( data ).execute().then( function () {
+		win.updateSize();
 		// Force redraw by asking the browser to measure the elements' widths
 		win.$element.addClass( 'oo-ui-window-active oo-ui-window-setup' ).width();
 		win.$content.addClass( 'oo-ui-window-content-setup' ).width();
@@ -2361,8 +2375,8 @@ OO.ui.Window.prototype.setup = function ( data ) {
 /**
  * Ready window.
  *
- * This is called by OO.ui.WindowManager during window opening, and should not be called directly
- * by other systems.
+ * This is called by OO.ui.WindowManager during window opening (after the animation), and should not
+ * be called directly by other systems.
  *
  * @param {Object} [data] Window opening data
  * @return {jQuery.Promise} Promise resolved when window is ready
@@ -2381,8 +2395,8 @@ OO.ui.Window.prototype.ready = function ( data ) {
 /**
  * Hold window.
  *
- * This is called by OO.ui.WindowManager during window closing, and should not be called directly
- * by other systems.
+ * This is called by OO.ui.WindowManager during window closing (before the animation), and should
+ * not be called directly by other systems.
  *
  * @param {Object} [data] Window closing data
  * @return {jQuery.Promise} Promise resolved when window is held
@@ -2400,15 +2414,15 @@ OO.ui.Window.prototype.hold = function ( data ) {
 		}
 
 		// Force redraw by asking the browser to measure the elements' widths
-		win.$element.removeClass( 'oo-ui-window-ready' ).width();
-		win.$content.removeClass( 'oo-ui-window-content-ready' ).width();
+		win.$element.removeClass( 'oo-ui-window-ready oo-ui-window-setup' ).width();
+		win.$content.removeClass( 'oo-ui-window-content-ready oo-ui-window-content-setup' ).width();
 	} );
 };
 
 /**
  * Teardown window.
  *
- * This is called by OO.ui.WindowManager during window closing, and should not be called directly
+ * This is called by OO.ui.WindowManager during window closing (after the animation), and should not be called directly
  * by other systems.
  *
  * @param {Object} [data] Window closing data
@@ -2419,8 +2433,8 @@ OO.ui.Window.prototype.teardown = function ( data ) {
 
 	return this.getTeardownProcess( data ).execute().then( function () {
 		// Force redraw by asking the browser to measure the elements' widths
-		win.$element.removeClass( 'oo-ui-window-active oo-ui-window-setup' ).width();
-		win.$content.removeClass( 'oo-ui-window-content-setup' ).width();
+		win.$element.removeClass( 'oo-ui-window-active' ).width();
+
 		win.$focusTraps.off( 'focus', win.focusTrapHandler );
 		win.toggle( false );
 	} );
@@ -2431,7 +2445,7 @@ OO.ui.Window.prototype.teardown = function ( data ) {
  * Unless extended to include controls, the rendered dialog box is a simple window
  * that users can close by hitting the ‘Esc’ key. Dialog windows are used with OO.ui.WindowManager,
  * which opens, closes, and controls the presentation of the window. See the
- * [OOjs UI documentation on MediaWiki] [1] for more information.
+ * [OOUI documentation on MediaWiki] [1] for more information.
  *
  *     @example
  *     // A simple dialog window.
@@ -2459,7 +2473,7 @@ OO.ui.Window.prototype.teardown = function ( data ) {
  *     // Open the window!
  *     windowManager.openWindow( myDialog );
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Dialogs
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows/Dialogs
  *
  * @abstract
  * @class
@@ -2505,9 +2519,9 @@ OO.mixinClass( OO.ui.Dialog, OO.ui.mixin.PendingElement );
  * Symbolic name of dialog.
  *
  * The dialog class must have a symbolic name in order to be registered with OO.Factory.
- * Please see the [OOjs UI documentation on MediaWiki] [3] for more information.
+ * Please see the [OOUI documentation on MediaWiki] [3] for more information.
  *
- * [3]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Window_managers
+ * [3]: https://www.mediawiki.org/wiki/OOUI/Windows/Window_managers
  *
  * @abstract
  * @static
@@ -2536,7 +2550,7 @@ OO.ui.Dialog.static.title = '';
  * Actions can also be specified with data passed to the constructor (see #getSetupProcess). In this case, the static
  * value will be overridden.
  *
- * [2]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Process_Dialogs#Action_sets
+ * [2]: https://www.mediawiki.org/wiki/OOUI/Windows/Process_Dialogs#Action_sets
  *
  * @static
  * @inheritable
@@ -2599,6 +2613,10 @@ OO.ui.Dialog.prototype.onActionsChange = function () {
 	this.detachActions();
 	if ( !this.isClosing() ) {
 		this.attachActions();
+		if ( !this.isOpening() ) {
+			// If the dialog is currently opening, this will be called automatically soon.
+			this.updateSize();
+		}
 	}
 };
 
@@ -2697,11 +2715,33 @@ OO.ui.Dialog.prototype.initialize = function () {
 OO.ui.Dialog.prototype.getActionWidgets = function ( actions ) {
 	var i, len, widgets = [];
 	for ( i = 0, len = actions.length; i < len; i++ ) {
-		widgets.push(
-			new OO.ui.ActionWidget( actions[ i ] )
-		);
+		widgets.push( this.getActionWidget( actions[ i ] ) );
 	}
 	return widgets;
+};
+
+/**
+ * Get action widget from config
+ *
+ * Override this method to change the action widget class used.
+ *
+ * @param {Object} config Action widget config
+ * @return {OO.ui.ActionWidget} Action widget
+ */
+OO.ui.Dialog.prototype.getActionWidget = function ( config ) {
+	return new OO.ui.ActionWidget( this.getActionWidgetConfig( config ) );
+};
+
+/**
+ * Get action widget config
+ *
+ * Override this method to modify the action widget config
+ *
+ * @param {Object} config Initial action widget config
+ * @return {Object} Action widget config
+ */
+OO.ui.Dialog.prototype.getActionWidgetConfig = function ( config ) {
+	return config;
 };
 
 /**
@@ -2760,7 +2800,7 @@ OO.ui.Dialog.prototype.executeAction = function ( action ) {
  * action (e.g., ‘ok’) and ‘reject,’ the safe action (e.g., ‘cancel’). Both will close the window,
  * passing along the selected action.
  *
- * For more information and examples, please see the [OOjs UI documentation on MediaWiki][1].
+ * For more information and examples, please see the [OOUI documentation on MediaWiki][1].
  *
  *     @example
  *     // Example: Creating and opening a message dialog window.
@@ -2776,7 +2816,7 @@ OO.ui.Dialog.prototype.executeAction = function ( action ) {
  *         message: 'This is the message'
  *     } );
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Message_Dialogs
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows/Message_Dialogs
  *
  * @class
  * @extends OO.ui.Dialog
@@ -2848,34 +2888,6 @@ OO.ui.MessageDialog.static.actions = [
 ];
 
 /* Methods */
-
-/**
- * @inheritdoc
- */
-OO.ui.MessageDialog.prototype.setManager = function ( manager ) {
-	OO.ui.MessageDialog.parent.prototype.setManager.call( this, manager );
-
-	// Events
-	this.manager.connect( this, {
-		resize: 'onResize'
-	} );
-
-	return this;
-};
-
-/**
- * Handle window resized events.
- *
- * @private
- */
-OO.ui.MessageDialog.prototype.onResize = function () {
-	var dialog = this;
-	dialog.fitActions();
-	// Wait for CSS transition to finish and do it again :(
-	setTimeout( function () {
-		dialog.fitActions();
-	}, 300 );
-};
 
 /**
  * Toggle action layout between vertical and horizontal.
@@ -2977,7 +2989,9 @@ OO.ui.MessageDialog.prototype.getBodyHeight = function () {
  * @inheritdoc
  */
 OO.ui.MessageDialog.prototype.setDimensions = function ( dim ) {
-	var $scrollable = this.container.$element;
+	var
+		dialog = this,
+		$scrollable = this.container.$element;
 	OO.ui.MessageDialog.parent.prototype.setDimensions.call( this, dim );
 
 	// Twiddle the overflow property, otherwise an unnecessary scrollbar will be produced.
@@ -2997,6 +3011,12 @@ OO.ui.MessageDialog.prototype.setDimensions = function ( dim ) {
 		}
 
 		$scrollable[ 0 ].style.overflow = oldOverflow;
+	}, 300 );
+
+	dialog.fitActions();
+	// Wait for CSS transition to finish and do it again :(
+	setTimeout( function () {
+		dialog.fitActions();
 	}, 300 );
 
 	return this;
@@ -3034,8 +3054,16 @@ OO.ui.MessageDialog.prototype.initialize = function () {
 /**
  * @inheritdoc
  */
+OO.ui.MessageDialog.prototype.getActionWidgetConfig = function ( config ) {
+	// Force unframed
+	return $.extend( {}, config, { framed: false } );
+};
+
+/**
+ * @inheritdoc
+ */
 OO.ui.MessageDialog.prototype.attachActions = function () {
-	var i, len, other, special, others;
+	var i, len, special, others;
 
 	// Parent method
 	OO.ui.MessageDialog.parent.prototype.attachActions.call( this );
@@ -3045,24 +3073,15 @@ OO.ui.MessageDialog.prototype.attachActions = function () {
 
 	if ( special.safe ) {
 		this.$actions.append( special.safe.$element );
-		special.safe.toggleFramed( false );
+		special.safe.toggleFramed( true );
 	}
-	if ( others.length ) {
-		for ( i = 0, len = others.length; i < len; i++ ) {
-			other = others[ i ];
-			this.$actions.append( other.$element );
-			other.toggleFramed( false );
-		}
+	for ( i = 0, len = others.length; i < len; i++ ) {
+		this.$actions.append( others[ i ].$element );
+		others[ i ].toggleFramed( true );
 	}
 	if ( special.primary ) {
 		this.$actions.append( special.primary.$element );
-		special.primary.toggleFramed( false );
-	}
-
-	if ( !this.isOpening() ) {
-		// If the dialog is currently opening, this will be called automatically soon.
-		// This also calls #fitActions.
-		this.updateSize();
+		special.primary.toggleFramed( true );
 	}
 };
 
@@ -3082,7 +3101,7 @@ OO.ui.MessageDialog.prototype.fitActions = function () {
 	this.toggleVerticalActionLayout( false );
 	for ( i = 0, len = actions.length; i < len; i++ ) {
 		action = actions[ i ];
-		if ( action.$element.innerWidth() < action.$label.outerWidth( true ) ) {
+		if ( action.$element[ 0 ].scrollWidth > action.$element[ 0 ].clientWidth ) {
 			this.toggleVerticalActionLayout( true );
 			break;
 		}
@@ -3110,7 +3129,7 @@ OO.ui.MessageDialog.prototype.fitActions = function () {
  * a ‘primary’ action on the right (e.g., ‘Done’).
  *
  * Like other windows, the process dialog is managed by a {@link OO.ui.WindowManager window manager}.
- * Please see the [OOjs UI documentation on MediaWiki][1] for more information and examples.
+ * Please see the [OOUI documentation on MediaWiki][1] for more information and examples.
  *
  *     @example
  *     // Example: Creating and opening a process dialog window.
@@ -3149,7 +3168,7 @@ OO.ui.MessageDialog.prototype.fitActions = function () {
  *     windowManager.addWindows( [ dialog ] );
  *     windowManager.openWindow( dialog );
  *
- * [1]: https://www.mediawiki.org/wiki/OOjs_UI/Windows/Process_Dialogs
+ * [1]: https://www.mediawiki.org/wiki/OOUI/Windows/Process_Dialogs
  *
  * @abstract
  * @class
@@ -3253,26 +3272,23 @@ OO.ui.ProcessDialog.prototype.initialize = function () {
 /**
  * @inheritdoc
  */
-OO.ui.ProcessDialog.prototype.getActionWidgets = function ( actions ) {
-	var i, len, config,
-		isMobile = OO.ui.isMobile(),
-		widgets = [];
+OO.ui.ProcessDialog.prototype.getActionWidgetConfig = function ( config ) {
+	var isMobile = OO.ui.isMobile();
 
-	for ( i = 0, len = actions.length; i < len; i++ ) {
-		config = $.extend( { framed: !OO.ui.isMobile() }, actions[ i ] );
-		if ( isMobile &&
-			( config.flags === 'back' || ( Array.isArray( config.flags ) && config.flags.indexOf( 'back' ) !== -1 ) )
-		) {
-			$.extend( config, {
-				icon: 'previous',
-				label: ''
-			} );
-		}
-		widgets.push(
-			new OO.ui.ActionWidget( config )
-		);
+	// Default to unframed on mobile
+	config = $.extend( { framed: !isMobile }, config );
+	// Change back buttons to icon only on mobile
+	if (
+		isMobile &&
+		( config.flags === 'back' || ( Array.isArray( config.flags ) && config.flags.indexOf( 'back' ) !== -1 ) )
+	) {
+		$.extend( config, {
+			icon: 'previous',
+			label: ''
+		} );
 	}
-	return widgets;
+
+	return config;
 };
 
 /**
@@ -3296,9 +3312,6 @@ OO.ui.ProcessDialog.prototype.attachActions = function () {
 	if ( special.safe ) {
 		this.$safeActions.append( special.safe.$element );
 	}
-
-	this.fitLabel();
-	this.$body.css( 'bottom', this.$foot.outerHeight( true ) );
 };
 
 /**
@@ -3316,10 +3329,20 @@ OO.ui.ProcessDialog.prototype.executeAction = function ( action ) {
  * @inheritdoc
  */
 OO.ui.ProcessDialog.prototype.setDimensions = function () {
+	var dialog = this;
+
 	// Parent method
 	OO.ui.ProcessDialog.parent.prototype.setDimensions.apply( this, arguments );
 
 	this.fitLabel();
+
+	// If there are many actions, they might be shown on multiple lines. Their layout can change when
+	// resizing the dialog and when changing the actions. Adjust the height of the footer to fit them.
+	dialog.$body.css( 'bottom', dialog.$foot.outerHeight( true ) );
+	// Wait for CSS transition to finish and do it again :(
+	setTimeout( function () {
+		dialog.$body.css( 'bottom', dialog.$foot.outerHeight( true ) );
+	}, 300 );
 };
 
 /**
@@ -3582,4 +3605,4 @@ OO.ui.prompt = function ( text, options ) {
 
 }( OO ) );
 
-//# sourceMappingURL=oojs-ui-windows.js.map
+//# sourceMappingURL=oojs-ui-windows.js.map.json

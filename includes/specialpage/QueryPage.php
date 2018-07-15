@@ -21,7 +21,7 @@
  * @ingroup SpecialPage
  */
 
-use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\IResultWrapper;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\DBError;
 
@@ -69,40 +69,40 @@ abstract class QueryPage extends SpecialPage {
 		if ( $qp === null ) {
 			// QueryPage subclass, Special page name
 			$qp = [
-				[ 'AncientPagesPage', 'Ancientpages' ],
-				[ 'BrokenRedirectsPage', 'BrokenRedirects' ],
-				[ 'DeadendPagesPage', 'Deadendpages' ],
-				[ 'DoubleRedirectsPage', 'DoubleRedirects' ],
-				[ 'FileDuplicateSearchPage', 'FileDuplicateSearch' ],
-				[ 'ListDuplicatedFilesPage', 'ListDuplicatedFiles' ],
-				[ 'LinkSearchPage', 'LinkSearch' ],
-				[ 'ListredirectsPage', 'Listredirects' ],
-				[ 'LonelyPagesPage', 'Lonelypages' ],
-				[ 'LongPagesPage', 'Longpages' ],
-				[ 'MediaStatisticsPage', 'MediaStatistics' ],
-				[ 'MIMEsearchPage', 'MIMEsearch' ],
-				[ 'MostcategoriesPage', 'Mostcategories' ],
-				[ 'MostimagesPage', 'Mostimages' ],
-				[ 'MostinterwikisPage', 'Mostinterwikis' ],
-				[ 'MostlinkedCategoriesPage', 'Mostlinkedcategories' ],
-				[ 'MostlinkedTemplatesPage', 'Mostlinkedtemplates' ],
-				[ 'MostlinkedPage', 'Mostlinked' ],
-				[ 'MostrevisionsPage', 'Mostrevisions' ],
-				[ 'FewestrevisionsPage', 'Fewestrevisions' ],
-				[ 'ShortPagesPage', 'Shortpages' ],
-				[ 'UncategorizedCategoriesPage', 'Uncategorizedcategories' ],
-				[ 'UncategorizedPagesPage', 'Uncategorizedpages' ],
-				[ 'UncategorizedImagesPage', 'Uncategorizedimages' ],
-				[ 'UncategorizedTemplatesPage', 'Uncategorizedtemplates' ],
-				[ 'UnusedCategoriesPage', 'Unusedcategories' ],
-				[ 'UnusedimagesPage', 'Unusedimages' ],
-				[ 'WantedCategoriesPage', 'Wantedcategories' ],
-				[ 'WantedFilesPage', 'Wantedfiles' ],
-				[ 'WantedPagesPage', 'Wantedpages' ],
-				[ 'WantedTemplatesPage', 'Wantedtemplates' ],
-				[ 'UnwatchedpagesPage', 'Unwatchedpages' ],
-				[ 'UnusedtemplatesPage', 'Unusedtemplates' ],
-				[ 'WithoutInterwikiPage', 'Withoutinterwiki' ],
+				[ AncientPagesPage::class, 'Ancientpages' ],
+				[ BrokenRedirectsPage::class, 'BrokenRedirects' ],
+				[ DeadendPagesPage::class, 'Deadendpages' ],
+				[ DoubleRedirectsPage::class, 'DoubleRedirects' ],
+				[ FileDuplicateSearchPage::class, 'FileDuplicateSearch' ],
+				[ ListDuplicatedFilesPage::class, 'ListDuplicatedFiles' ],
+				[ LinkSearchPage::class, 'LinkSearch' ],
+				[ ListredirectsPage::class, 'Listredirects' ],
+				[ LonelyPagesPage::class, 'Lonelypages' ],
+				[ LongPagesPage::class, 'Longpages' ],
+				[ MediaStatisticsPage::class, 'MediaStatistics' ],
+				[ MIMEsearchPage::class, 'MIMEsearch' ],
+				[ MostcategoriesPage::class, 'Mostcategories' ],
+				[ MostimagesPage::class, 'Mostimages' ],
+				[ MostinterwikisPage::class, 'Mostinterwikis' ],
+				[ MostlinkedCategoriesPage::class, 'Mostlinkedcategories' ],
+				[ MostlinkedTemplatesPage::class, 'Mostlinkedtemplates' ],
+				[ MostlinkedPage::class, 'Mostlinked' ],
+				[ MostrevisionsPage::class, 'Mostrevisions' ],
+				[ FewestrevisionsPage::class, 'Fewestrevisions' ],
+				[ ShortPagesPage::class, 'Shortpages' ],
+				[ UncategorizedCategoriesPage::class, 'Uncategorizedcategories' ],
+				[ UncategorizedPagesPage::class, 'Uncategorizedpages' ],
+				[ UncategorizedImagesPage::class, 'Uncategorizedimages' ],
+				[ UncategorizedTemplatesPage::class, 'Uncategorizedtemplates' ],
+				[ UnusedCategoriesPage::class, 'Unusedcategories' ],
+				[ UnusedimagesPage::class, 'Unusedimages' ],
+				[ WantedCategoriesPage::class, 'Wantedcategories' ],
+				[ WantedFilesPage::class, 'Wantedfiles' ],
+				[ WantedPagesPage::class, 'Wantedpages' ],
+				[ WantedTemplatesPage::class, 'Wantedtemplates' ],
+				[ UnwatchedpagesPage::class, 'Unwatchedpages' ],
+				[ UnusedtemplatesPage::class, 'Unusedtemplates' ],
+				[ WithoutInterwikiPage::class, 'Withoutinterwiki' ],
 			];
 			Hooks::run( 'wgQueryPages', [ &$qp ] );
 		}
@@ -387,7 +387,7 @@ abstract class QueryPage extends SpecialPage {
 	 * Run the query and return the result
 	 * @param int|bool $limit Numerical limit or false for no limit
 	 * @param int|bool $offset Numerical offset or false for no offset
-	 * @return ResultWrapper
+	 * @return IResultWrapper
 	 * @since 1.18
 	 */
 	public function reallyDoQuery( $limit, $offset = false ) {
@@ -439,7 +439,7 @@ abstract class QueryPage extends SpecialPage {
 	 * Somewhat deprecated, you probably want to be using execute()
 	 * @param int|bool $offset
 	 * @param int|bool $limit
-	 * @return ResultWrapper
+	 * @return IResultWrapper
 	 */
 	public function doQuery( $offset = false, $limit = false ) {
 		if ( $this->isCached() && $this->isCacheable() ) {
@@ -453,7 +453,7 @@ abstract class QueryPage extends SpecialPage {
 	 * Fetch the query results from the query cache
 	 * @param int|bool $limit Numerical limit or false for no limit
 	 * @param int|bool $offset Numerical offset or false for no offset
-	 * @return ResultWrapper
+	 * @return IResultWrapper
 	 * @since 1.18
 	 */
 	public function fetchFromCache( $limit, $offset = false ) {
@@ -685,7 +685,7 @@ abstract class QueryPage extends SpecialPage {
 	 * @param OutputPage $out OutputPage to print to
 	 * @param Skin $skin User skin to use
 	 * @param IDatabase $dbr Database (read) connection to use
-	 * @param ResultWrapper $res Result pointer
+	 * @param IResultWrapper $res Result pointer
 	 * @param int $num Number of available result rows
 	 * @param int $offset Paging offset
 	 */
@@ -751,7 +751,7 @@ abstract class QueryPage extends SpecialPage {
 	/**
 	 * Do any necessary preprocessing of the result object.
 	 * @param IDatabase $db
-	 * @param ResultWrapper $res
+	 * @param IResultWrapper $res
 	 */
 	function preprocessResults( $db, $res ) {
 	}
@@ -806,7 +806,7 @@ abstract class QueryPage extends SpecialPage {
 		}
 		$title = Title::makeTitle( intval( $row->namespace ), $row->title );
 		if ( $title ) {
-			$date = isset( $row->timestamp ) ? $row->timestamp : '';
+			$date = $row->timestamp ?? '';
 			$comments = '';
 			if ( $title ) {
 				$talkpage = $title->getTalkPage();
@@ -830,7 +830,7 @@ abstract class QueryPage extends SpecialPage {
 	}
 
 	function feedItemAuthor( $row ) {
-		return isset( $row->user_text ) ? $row->user_text : '';
+		return $row->user_text ?? '';
 	}
 
 	function feedTitle() {
@@ -853,19 +853,19 @@ abstract class QueryPage extends SpecialPage {
 	 * title and optional the namespace field) and executes the batch. This operation will pre-cache
 	 * LinkCache information like page existence and information for stub color and redirect hints.
 	 *
-	 * @param ResultWrapper $res The ResultWrapper object to process. Needs to include the title
+	 * @param IResultWrapper $res The ResultWrapper object to process. Needs to include the title
 	 *  field and namespace field, if the $ns parameter isn't set.
 	 * @param null $ns Use this namespace for the given titles in the ResultWrapper object,
 	 *  instead of the namespace value of $res.
 	 */
-	protected function executeLBFromResultWrapper( ResultWrapper $res, $ns = null ) {
+	protected function executeLBFromResultWrapper( IResultWrapper $res, $ns = null ) {
 		if ( !$res->numRows() ) {
 			return;
 		}
 
 		$batch = new LinkBatch;
 		foreach ( $res as $row ) {
-			$batch->add( $ns !== null ? $ns : $row->namespace, $row->title );
+			$batch->add( $ns ?? $row->namespace, $row->title );
 		}
 		$batch->execute();
 

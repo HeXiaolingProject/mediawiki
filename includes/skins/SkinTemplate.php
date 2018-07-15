@@ -46,7 +46,7 @@ class SkinTemplate extends Skin {
 	 * @var string For QuickTemplate, the name of the subclass which will
 	 *   actually fill the template.  Child classes should override the default.
 	 */
-	public $template = 'QuickTemplate';
+	public $template = QuickTemplate::class;
 
 	public $thispage;
 	public $titletxt;
@@ -55,30 +55,6 @@ class SkinTemplate extends Skin {
 	public $loggedin;
 	public $username;
 	public $userpageUrlDetails;
-
-	/**
-	 * Add specific styles for this skin
-	 *
-	 * @param OutputPage $out
-	 */
-	public function setupSkinUserCss( OutputPage $out ) {
-		$moduleStyles = [
-			'mediawiki.legacy.shared',
-			'mediawiki.legacy.commonPrint',
-			'mediawiki.sectionAnchor'
-		];
-		if ( $out->isSyndicated() ) {
-			$moduleStyles[] = 'mediawiki.feedlink';
-		}
-
-		// Deprecated since 1.26: Unconditional loading of mediawiki.ui.button
-		// on every page is deprecated. Express a dependency instead.
-		if ( strpos( $out->getHTML(), 'mw-ui-button' ) !== false ) {
-			$moduleStyles[] = 'mediawiki.ui.button';
-		}
-
-		$out->addModuleStyles( $moduleStyles );
-	}
 
 	/**
 	 * Create the template engine object; we feed it a bunch of data
@@ -230,7 +206,7 @@ class SkinTemplate extends Skin {
 	/**
 	 * initialize various variables and generate the template
 	 *
-	 * @param OutputPage $out
+	 * @param OutputPage|null $out
 	 */
 	function outputPage( OutputPage $out = null ) {
 		Profiler::instance()->setTemplated( true );
@@ -489,7 +465,7 @@ class SkinTemplate extends Skin {
 
 		$tpl->set( 'debug', '' );
 		$tpl->set( 'debughtml', $this->generateDebugHTML() );
-		$tpl->set( 'reporttime', wfReportTime() );
+		$tpl->set( 'reporttime', wfReportTime( $out->getCSPNonce() ) );
 
 		// Avoid PHP 7.1 warning of passing $this by reference
 		$skinTemplate = $this;
@@ -532,7 +508,7 @@ class SkinTemplate extends Skin {
 	 *
 	 * @since 1.31
 	 *
-	 * @param array $personalTools
+	 * @param array|null $personalTools
 	 * @param array $options
 	 * @return string
 	 */
@@ -1140,11 +1116,11 @@ class SkinTemplate extends Skin {
 
 			if ( $userCanRead && !$wgDisableLangConversion ) {
 				$pageLang = $title->getPageLanguage();
-				// Gets list of language variants
-				$variants = $pageLang->getVariants();
 				// Checks that language conversion is enabled and variants exist
 				// And if it is not in the special namespace
-				if ( count( $variants ) > 1 ) {
+				if ( $pageLang->hasVariants() ) {
+					// Gets list of language variants
+					$variants = $pageLang->getVariants();
 					// Gets preferred variant (note that user preference is
 					// only possible for wiki content language variant)
 					$preferred = $pageLang->getPreferredVariant();

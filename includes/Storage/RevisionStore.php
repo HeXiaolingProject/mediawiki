@@ -26,6 +26,7 @@
 
 namespace MediaWiki\Storage;
 
+use ActorMigration;
 use CommentStore;
 use CommentStoreComment;
 use Content;
@@ -42,7 +43,11 @@ use MediaWiki\User\UserIdentityValue;
 use Message;
 use MWException;
 use MWUnknownContentModelException;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use RecentChange;
+use Revision;
 use stdClass;
 use Title;
 use User;
@@ -61,7 +66,10 @@ use Wikimedia\Rdbms\LoadBalancer;
  * @note This was written to act as a drop-in replacement for the corresponding
  *       static methods in Revision.
  */
-class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup {
+class RevisionStore
+	implements IDBAccessObject, RevisionFactory, RevisionLookup, LoggerAwareInterface {
+
+	const ROW_CACHE_KEY = 'revision-row-1.29';
 
 	/**
 	 * @var SqlBlobStore
@@ -75,6 +83,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 
 	/**
 	 * @var boolean
+	 * @see $wgContentHandlerUseDB
 	 */
 	private $contentHandlerUseDB = true;
 
@@ -89,25 +98,119 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	private $cache;
 
 	/**
+	 * @var CommentStore
+	 */
+	private $commentStore;
+
+	/**
+	 * @var ActorMigration
+	 */
+	private $actorMigration;
+
+	/**
+	 * @var LoggerInterface
+	 */
+	private $logger;
+
+	/**
+	 * @var NameTableStore
+	 */
+	private $contentModelStore;
+
+	/**
+	 * @var NameTableStore
+	 */
+	private $slotRoleStore;
+
+	/** @var int An appropriate combination of SCHEMA_COMPAT_XXX flags. */
+	private $mcrMigrationStage;
+
+	/**
 	 * @todo $blobStore should be allowed to be any BlobStore!
 	 *
 	 * @param LoadBalancer $loadBalancer
 	 * @param SqlBlobStore $blobStore
 	 * @param WANObjectCache $cache
+	 * @param CommentStore $commentStore
+	 * @param NameTableStore $contentModelStore
+	 * @param NameTableStore $slotRoleStore
+	 * @param int $mcrMigrationStage An appropriate combination of SCHEMA_COMPAT_XXX flags
+	 * @param ActorMigration $actorMigration
 	 * @param bool|string $wikiId
+	 *
+	 * @throws MWException if $mcrMigrationStage or $wikiId is invalid.
 	 */
 	public function __construct(
 		LoadBalancer $loadBalancer,
 		SqlBlobStore $blobStore,
 		WANObjectCache $cache,
+		CommentStore $commentStore,
+		NameTableStore $contentModelStore,
+		NameTableStore $slotRoleStore,
+		$mcrMigrationStage,
+		ActorMigration $actorMigration,
 		$wikiId = false
 	) {
 		Assert::parameterType( 'string|boolean', $wikiId, '$wikiId' );
+		Assert::parameterType( 'integer', $mcrMigrationStage, '$mcrMigrationStage' );
+		Assert::parameter(
+			( $mcrMigrationStage & SCHEMA_COMPAT_READ_BOTH ) !== SCHEMA_COMPAT_READ_BOTH,
+			'$mcrMigrationStage',
+			'Reading from the old and the new schema at the same time is not supported.'
+		);
+		Assert::parameter(
+			( $mcrMigrationStage & SCHEMA_COMPAT_READ_BOTH ) !== 0,
+			'$mcrMigrationStage',
+			'Reading needs to be enabled for the old or the new schema.'
+		);
+		Assert::parameter(
+			( $mcrMigrationStage & SCHEMA_COMPAT_WRITE_BOTH ) !== 0,
+			'$mcrMigrationStage',
+			'Writing needs to be enabled for the old or the new schema.'
+		);
+		Assert::parameter(
+			( $mcrMigrationStage & SCHEMA_COMPAT_READ_OLD ) === 0
+			|| ( $mcrMigrationStage & SCHEMA_COMPAT_WRITE_OLD ) !== 0,
+			'$mcrMigrationStage',
+			'Cannot read the old schema when not also writing it.'
+		);
+		Assert::parameter(
+			( $mcrMigrationStage & SCHEMA_COMPAT_READ_NEW ) === 0
+			|| ( $mcrMigrationStage & SCHEMA_COMPAT_WRITE_NEW ) !== 0,
+			'$mcrMigrationStage',
+			'Cannot read the new schema when not also writing it.'
+		);
 
 		$this->loadBalancer = $loadBalancer;
 		$this->blobStore = $blobStore;
 		$this->cache = $cache;
+		$this->commentStore = $commentStore;
+		$this->contentModelStore = $contentModelStore;
+		$this->slotRoleStore = $slotRoleStore;
+		$this->mcrMigrationStage = $mcrMigrationStage;
+		$this->actorMigration = $actorMigration;
 		$this->wikiId = $wikiId;
+		$this->logger = new NullLogger();
+	}
+
+	/**
+	 * @param int $flags A combination of SCHEMA_COMPAT_XXX flags.
+	 * @return bool True if all the given flags were set in the $mcrMigrationStage
+	 *         parameter passed to the constructor.
+	 */
+	private function hasMcrSchemaFlags( $flags ) {
+		return ( $this->mcrMigrationStage & $flags ) === $flags;
+	}
+
+	public function setLogger( LoggerInterface $logger ) {
+		$this->logger = $logger;
+	}
+
+	/**
+	 * @return bool Whether the store is read-only
+	 */
+	public function isReadOnly() {
+		return $this->blobStore->isReadOnly();
 	}
 
 	/**
@@ -118,9 +221,20 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	}
 
 	/**
+	 * @see $wgContentHandlerUseDB
 	 * @param bool $contentHandlerUseDB
+	 * @throws MWException
 	 */
 	public function setContentHandlerUseDB( $contentHandlerUseDB ) {
+		if ( $this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_NEW )
+			|| $this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_NEW )
+		) {
+			if ( !$contentHandlerUseDB ) {
+				throw new MWException(
+					'Content model must be stored in the database for multi content revision migration.'
+				);
+			}
+		}
 		$this->contentHandlerUseDB = $contentHandlerUseDB;
 	}
 
@@ -139,6 +253,16 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	private function getDBConnection( $mode ) {
 		$lb = $this->getDBLoadBalancer();
 		return $lb->getConnection( $mode, [], $this->wikiId );
+	}
+
+	/**
+	 * @param int $queryFlags a bit field composed of READ_XXX flags
+	 *
+	 * @return DBConnRef
+	 */
+	private function getDBConnectionRefForQueryFlags( $queryFlags ) {
+		list( $mode, ) = DBAccessObjectUtils::getDBOptions( $queryFlags );
+		return $this->getDBConnectionRef( $mode );
 	}
 
 	/**
@@ -173,24 +297,35 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @return Title
 	 * @throws RevisionAccessException
 	 */
-	public function getTitle( $pageId, $revId, $queryFlags = 0 ) {
+	public function getTitle( $pageId, $revId, $queryFlags = self::READ_NORMAL ) {
 		if ( !$pageId && !$revId ) {
 			throw new InvalidArgumentException( '$pageId and $revId cannot both be 0 or null' );
 		}
 
-		list( $dbMode, $dbOptions, , ) = DBAccessObjectUtils::getDBOptions( $queryFlags );
-		$titleFlags = $dbMode == DB_MASTER ? Title::GAID_FOR_UPDATE : 0;
-		$title = null;
+		// This method recalls itself with READ_LATEST if READ_NORMAL doesn't get us a Title
+		// So ignore READ_LATEST_IMMUTABLE flags and handle the fallback logic in this method
+		if ( DBAccessObjectUtils::hasFlags( $queryFlags, self::READ_LATEST_IMMUTABLE ) ) {
+			$queryFlags = self::READ_NORMAL;
+		}
+
+		$canUseTitleNewFromId = ( $pageId !== null && $pageId > 0 && $this->wikiId === false );
+		list( $dbMode, $dbOptions ) = DBAccessObjectUtils::getDBOptions( $queryFlags );
+		$titleFlags = ( $dbMode == DB_MASTER ? Title::GAID_FOR_UPDATE : 0 );
 
 		// Loading by ID is best, but Title::newFromID does not support that for foreign IDs.
-		if ( $pageId !== null && $pageId > 0 && $this->wikiId === false ) {
+		if ( $canUseTitleNewFromId ) {
 			// TODO: better foreign title handling (introduce TitleFactory)
 			$title = Title::newFromID( $pageId, $titleFlags );
+			if ( $title ) {
+				return $title;
+			}
 		}
 
 		// rev_id is defined as NOT NULL, but this revision may not yet have been inserted.
-		if ( !$title && $revId !== null && $revId > 0 ) {
-			$dbr = $this->getDbConnectionRef( $dbMode );
+		$canUseRevId = ( $revId !== null && $revId > 0 );
+
+		if ( $canUseRevId ) {
+			$dbr = $this->getDBConnectionRef( $dbMode );
 			// @todo: Title::getSelectFields(), or Title::getQueryInfo(), or something like that
 			$row = $dbr->selectRow(
 				[ 'revision', 'page' ],
@@ -209,24 +344,32 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			);
 			if ( $row ) {
 				// TODO: better foreign title handling (introduce TitleFactory)
-				$title = Title::newFromRow( $row );
+				return Title::newFromRow( $row );
 			}
 		}
 
-		if ( !$title ) {
-			throw new RevisionAccessException(
-				"Could not determine title for page ID $pageId and revision ID $revId"
-			);
+		// If we still don't have a title, fallback to master if that wasn't already happening.
+		if ( $dbMode !== DB_MASTER ) {
+			$title = $this->getTitle( $pageId, $revId, self::READ_LATEST );
+			if ( $title ) {
+				$this->logger->info(
+					__METHOD__ . ' fell back to READ_LATEST and got a Title.',
+					[ 'trace' => wfBacktrace() ]
+				);
+				return $title;
+			}
 		}
 
-		return $title;
+		throw new RevisionAccessException(
+			"Could not determine title for page ID $pageId and revision ID $revId"
+		);
 	}
 
 	/**
 	 * @param mixed $value
 	 * @param string $name
 	 *
-	 * @throw IncompleteRevisionException if $value is null
+	 * @throws IncompleteRevisionException if $value is null
 	 * @return mixed $value, if $value is not null
 	 */
 	private function failOnNull( $value, $name ) {
@@ -243,7 +386,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @param mixed $value
 	 * @param string $name
 	 *
-	 * @throw IncompleteRevisionException if $value is empty
+	 * @throws IncompleteRevisionException if $value is empty
 	 * @return mixed $value, if $value is not null
 	 */
 	private function failOnEmpty( $value, $name ) {
@@ -257,8 +400,8 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	}
 
 	/**
-	 * Insert a new revision into the database, returning the new revision ID
-	 * number on success and dies horribly on failure.
+	 * Insert a new revision into the database, returning the new revision record
+	 * on success and dies horribly on failure.
 	 *
 	 * MCR migration note: this replaces Revision::insertOn
 	 *
@@ -272,13 +415,37 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 		// TODO: pass in a DBTransactionContext instead of a database connection.
 		$this->checkDatabaseWikiId( $dbw );
 
-		if ( !$rev->getSlotRoles() ) {
-			throw new InvalidArgumentException( 'At least one slot needs to be defined!' );
+		$slotRoles = $rev->getSlotRoles();
+
+		// Make sure the main slot is always provided throughout migration
+		if ( !in_array( 'main', $slotRoles ) ) {
+			throw new InvalidArgumentException(
+				'main slot must be provided'
+			);
 		}
 
-		if ( $rev->getSlotRoles() !== [ 'main' ] ) {
-			throw new InvalidArgumentException( 'Only the main slot is supported for now!' );
+		// If we are not writing into the new schema, we can't support extra slots.
+		if ( !$this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_NEW ) && $slotRoles !== [ 'main' ] ) {
+			throw new InvalidArgumentException(
+				'Only the main slot is supported when not writing to the MCR enabled schema!'
+			);
 		}
+
+		// As long as we are not reading from the new schema, we don't want to write extra slots.
+		if ( !$this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_NEW ) && $slotRoles !== [ 'main' ] ) {
+			throw new InvalidArgumentException(
+				'Only the main slot is supported when not reading from the MCR enabled schema!'
+			);
+		}
+
+		// Checks
+		$this->failOnNull( $rev->getSize(), 'size field' );
+		$this->failOnEmpty( $rev->getSha1(), 'sha1 field' );
+		$this->failOnEmpty( $rev->getTimestamp(), 'timestamp field' );
+		$comment = $this->failOnNull( $rev->getComment( RevisionRecord::RAW ), 'comment' );
+		$user = $this->failOnNull( $rev->getUser( RevisionRecord::RAW ), 'user' );
+		$this->failOnNull( $user->getId(), 'user field' );
+		$this->failOnEmpty( $user->getName(), 'user_text field' );
 
 		// TODO: we shouldn't need an actual Title here.
 		$title = Title::newFromLinkTarget( $rev->getPageAsLinkTarget() );
@@ -288,124 +455,28 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			? $this->getPreviousRevisionId( $dbw, $rev )
 			: $rev->getParentId();
 
-		// Record the text (or external storage URL) to the blob store
-		$slot = $rev->getSlot( 'main', RevisionRecord::RAW );
-
-		$size = $this->failOnNull( $rev->getSize(), 'size field' );
-		$sha1 = $this->failOnEmpty( $rev->getSha1(), 'sha1 field' );
-
-		if ( !$slot->hasAddress() ) {
-			$content = $slot->getContent();
-			$format = $content->getDefaultFormat();
-			$model = $content->getModel();
-
-			$this->checkContentModel( $content, $title );
-
-			$data = $content->serialize( $format );
-
-			// Hints allow the blob store to optimize by "leaking" application level information to it.
-			// TODO: with the new MCR storage schema, we rev_id have this before storing the blobs.
-			// When we have it, add rev_id as a hint. Can be used with rev_parent_id for
-			// differential storage or compression of subsequent revisions.
-			$blobHints = [
-				BlobStore::DESIGNATION_HINT => 'page-content', // BlobStore may be used for other things too.
-				BlobStore::PAGE_HINT => $pageId,
-				BlobStore::ROLE_HINT => $slot->getRole(),
-				BlobStore::PARENT_HINT => $parentId,
-				BlobStore::SHA1_HINT => $slot->getSha1(),
-				BlobStore::MODEL_HINT => $model,
-				BlobStore::FORMAT_HINT => $format,
-			];
-
-			$blobAddress = $this->blobStore->storeBlob( $data, $blobHints );
-		} else {
-			$blobAddress = $slot->getAddress();
-			$model = $slot->getModel();
-			$format = $slot->getFormat();
-		}
-
-		$textId = $this->blobStore->getTextIdFromAddress( $blobAddress );
-
-		if ( !$textId ) {
-			throw new LogicException(
-				'Blob address not supported in 1.29 database schema: ' . $blobAddress
-			);
-		}
-
-		// getTextIdFromAddress() is free to insert something into the text table, so $textId
-		// may be a new value, not anything already contained in $blobAddress.
-		$blobAddress = 'tt:' . $textId;
-
-		$comment = $this->failOnNull( $rev->getComment( RevisionRecord::RAW ), 'comment' );
-		$user = $this->failOnNull( $rev->getUser( RevisionRecord::RAW ), 'user' );
-		$timestamp = $this->failOnEmpty( $rev->getTimestamp(), 'timestamp field' );
-
-		# Record the edit in revisions
-		$row = [
-			'rev_page'       => $pageId,
-			'rev_parent_id'  => $parentId,
-			'rev_text_id'    => $textId,
-			'rev_minor_edit' => $rev->isMinor() ? 1 : 0,
-			'rev_user'       => $this->failOnNull( $user->getId(), 'user field' ),
-			'rev_user_text'  => $this->failOnEmpty( $user->getName(), 'user_text field' ),
-			'rev_timestamp'  => $dbw->timestamp( $timestamp ),
-			'rev_deleted'    => $rev->getVisibility(),
-			'rev_len'        => $size,
-			'rev_sha1'       => $sha1,
-		];
-
-		if ( $rev->getId() !== null ) {
-			// Needed to restore revisions with their original ID
-			$row['rev_id'] = $rev->getId();
-		}
-
-		list( $commentFields, $commentCallback ) =
-			CommentStore::newKey( 'rev_comment' )->insertWithTempTable( $dbw, $comment );
-		$row += $commentFields;
-
-		if ( $this->contentHandlerUseDB ) {
-			// MCR migration note: rev_content_model and rev_content_format will go away
-
-			$defaultModel = ContentHandler::getDefaultModelFor( $title );
-			$defaultFormat = ContentHandler::getForModelID( $defaultModel )->getDefaultFormat();
-
-			$row['rev_content_model'] = ( $model === $defaultModel ) ? null : $model;
-			$row['rev_content_format'] = ( $format === $defaultFormat ) ? null : $format;
-		}
-
-		$dbw->insert( 'revision', $row, __METHOD__ );
-
-		if ( !isset( $row['rev_id'] ) ) {
-			// only if auto-increment was used
-			$row['rev_id'] = intval( $dbw->insertId() );
-		}
-		$commentCallback( $row['rev_id'] );
-
-		// Insert IP revision into ip_changes for use when querying for a range.
-		if ( $row['rev_user'] === 0 && IP::isValid( $row['rev_user_text'] ) ) {
-			$ipcRow = [
-				'ipc_rev_id'        => $row['rev_id'],
-				'ipc_rev_timestamp' => $row['rev_timestamp'],
-				'ipc_hex'           => IP::toHex( $row['rev_user_text'] ),
-			];
-			$dbw->insert( 'ip_changes', $ipcRow, __METHOD__ );
-		}
-
-		$newSlot = SlotRecord::newSaved( $row['rev_id'], $blobAddress, $slot );
-		$slots = new RevisionSlots( [ 'main' => $newSlot ] );
-
-		$user = new UserIdentityValue( intval( $row['rev_user'] ), $row['rev_user_text'] );
-
-		$rev = new RevisionStoreRecord(
-			$title,
-			$user,
-			$comment,
-			(object)$row,
-			$slots,
-			$this->wikiId
+		/** @var RevisionRecord $rev */
+		$rev = $dbw->doAtomicSection(
+			__METHOD__,
+			function ( IDatabase $dbw, $fname ) use (
+				$rev,
+				$user,
+				$comment,
+				$title,
+				$pageId,
+				$parentId
+			) {
+				return $this->insertRevisionInternal(
+					$rev,
+					$dbw,
+					$user,
+					$comment,
+					$title,
+					$pageId,
+					$parentId
+				);
+			}
 		);
-
-		$newSlot = $rev->getSlot( 'main', RevisionRecord::RAW );
 
 		// sanity checks
 		Assert::postcondition( $rev->getId() > 0, 'revision must have an ID' );
@@ -419,15 +490,371 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			'revision must have a user'
 		);
 
-		Assert::postcondition( $newSlot !== null, 'revision must have a main slot' );
-		Assert::postcondition(
-			$newSlot->getAddress() !== null,
-			'main slot must have an addess'
-		);
+		// Trigger exception if the main slot is missing.
+		// Technically, this could go away after MCR migration: while
+		// calling code may require a main slot to exist, RevisionStore
+		// really should not know or care about that requirement.
+		$rev->getSlot( 'main', RevisionRecord::RAW );
+
+		foreach ( $slotRoles as $role ) {
+			$slot = $rev->getSlot( $role, RevisionRecord::RAW );
+			Assert::postcondition(
+				$slot->getContent() !== null,
+				$role .  ' slot must have content'
+			);
+			Assert::postcondition(
+				$slot->hasRevision(),
+				$role .  ' slot must have a revision associated'
+			);
+		}
 
 		Hooks::run( 'RevisionRecordInserted', [ $rev ] );
 
+		// TODO: deprecate in 1.32!
+		$legacyRevision = new Revision( $rev );
+		Hooks::run( 'RevisionInsertComplete', [ &$legacyRevision, null, null ] );
+
 		return $rev;
+	}
+
+	private function insertRevisionInternal(
+		RevisionRecord $rev,
+		IDatabase $dbw,
+		User $user,
+		CommentStoreComment $comment,
+		Title $title,
+		$pageId,
+		$parentId
+	) {
+		$slotRoles = $rev->getSlotRoles();
+
+		$revisionRow = $this->insertRevisionRowOn(
+			$dbw,
+			$rev,
+			$title,
+			$parentId
+		);
+
+		$revisionId = $revisionRow['rev_id'];
+
+		$blobHints = [
+			BlobStore::PAGE_HINT => $pageId,
+			BlobStore::REVISION_HINT => $revisionId,
+			BlobStore::PARENT_HINT => $parentId,
+		];
+
+		$newSlots = [];
+		foreach ( $slotRoles as $role ) {
+			$slot = $rev->getSlot( $role, RevisionRecord::RAW );
+
+			if ( $slot->hasRevision() ) {
+				// If the SlotRecord already has a revision ID set, this means it already exists
+				// in the database, and should already belong to the current revision.
+				// TODO: properly abort transaction if the assertion fails!
+				Assert::parameter(
+					$slot->getRevision() === $revisionId,
+					'slot role ' . $slot->getRole(),
+					'Existing slot should belong to revision '
+					. $revisionId . ', but belongs to revision ' . $slot->getRevision() . '!'
+				);
+
+				// Slot exists, nothing to do, move along.
+				// This happens when restoring archived revisions.
+
+				$newSlots[$role] = $slot;
+
+				// Write the main slot's text ID to the revision table for backwards compatibility
+				if ( $slot->getRole() === 'main'
+					&& $this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_OLD )
+				) {
+					$blobAddress = $slot->getAddress();
+					$this->updateRevisionTextId( $dbw, $revisionId, $blobAddress );
+				}
+			} else {
+				$newSlots[$role] = $this->insertSlotOn( $dbw, $revisionId, $slot, $title, $blobHints );
+			}
+		}
+
+		$this->insertIpChangesRow( $dbw, $user, $rev, $revisionId );
+
+		$rev = new RevisionStoreRecord(
+			$title,
+			$user,
+			$comment,
+			(object)$revisionRow,
+			new RevisionSlots( $newSlots ),
+			$this->wikiId
+		);
+
+		return $rev;
+	}
+
+	/**
+	 * @param IDatabase $dbw
+	 * @param int $revisionId
+	 * @param string &$blobAddress (may change!)
+	 */
+	private function updateRevisionTextId( IDatabase $dbw, $revisionId, &$blobAddress ) {
+		$textId = $this->blobStore->getTextIdFromAddress( $blobAddress );
+		if ( !$textId ) {
+			throw new LogicException(
+				'Blob address not supported in 1.29 database schema: ' . $blobAddress
+			);
+		}
+
+		// getTextIdFromAddress() is free to insert something into the text table, so $textId
+		// may be a new value, not anything already contained in $blobAddress.
+		$blobAddress = SqlBlobStore::makeAddressFromTextId( $textId );
+
+		$dbw->update(
+			'revision',
+			[ 'rev_text_id' => $textId ],
+			[ 'rev_id' => $revisionId ],
+			__METHOD__
+		);
+	}
+
+	/**
+	 * @param IDatabase $dbw
+	 * @param int $revisionId
+	 * @param SlotRecord $protoSlot
+	 * @param Title $title
+	 * @param array $blobHints See the BlobStore::XXX_HINT constants
+	 * @return SlotRecord
+	 */
+	private function insertSlotOn(
+		IDatabase $dbw,
+		$revisionId,
+		SlotRecord $protoSlot,
+		Title $title,
+		array $blobHints = []
+	) {
+		if ( $protoSlot->hasAddress() ) {
+			$blobAddress = $protoSlot->getAddress();
+		} else {
+			$blobAddress = $this->storeContentBlob( $protoSlot, $title, $blobHints );
+		}
+
+		// Write the main slot's text ID to the revision table for backwards compatibility
+		if ( $protoSlot->getRole() === 'main'
+			&& $this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_OLD )
+		) {
+			$this->updateRevisionTextId( $dbw, $revisionId, $blobAddress );
+		}
+
+		if ( $this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_NEW ) ) {
+			if ( $protoSlot->hasContentId() ) {
+				$contentId = $protoSlot->getContentId();
+			} else {
+				$contentId = $this->insertContentRowOn( $protoSlot, $dbw, $blobAddress );
+			}
+
+			$this->insertSlotRowOn( $protoSlot, $dbw, $revisionId, $contentId );
+		} else {
+			$contentId = null;
+		}
+
+		$savedSlot = SlotRecord::newSaved(
+			$revisionId,
+			$contentId,
+			$blobAddress,
+			$protoSlot
+		);
+
+		return $savedSlot;
+	}
+
+	/**
+	 * Insert IP revision into ip_changes for use when querying for a range.
+	 * @param IDatabase $dbw
+	 * @param User $user
+	 * @param RevisionRecord $rev
+	 * @param int $revisionId
+	 */
+	private function insertIpChangesRow(
+		IDatabase $dbw,
+		User $user,
+		RevisionRecord $rev,
+		$revisionId
+	) {
+		if ( $user->getId() === 0 && IP::isValid( $user->getName() ) ) {
+			$ipcRow = [
+				'ipc_rev_id'        => $revisionId,
+				'ipc_rev_timestamp' => $dbw->timestamp( $rev->getTimestamp() ),
+				'ipc_hex'           => IP::toHex( $user->getName() ),
+			];
+			$dbw->insert( 'ip_changes', $ipcRow, __METHOD__ );
+		}
+	}
+
+	/**
+	 * @param IDatabase $dbw
+	 * @param RevisionRecord $rev
+	 * @param Title $title
+	 * @param int $parentId
+	 *
+	 * @return array a revision table row
+	 *
+	 * @throws MWException
+	 * @throws MWUnknownContentModelException
+	 */
+	private function insertRevisionRowOn(
+		IDatabase $dbw,
+		RevisionRecord $rev,
+		Title $title,
+		$parentId
+	) {
+		$revisionRow = $this->getBaseRevisionRow( $dbw, $rev, $title, $parentId );
+
+		list( $commentFields, $commentCallback ) =
+			$this->commentStore->insertWithTempTable(
+				$dbw,
+				'rev_comment',
+				$rev->getComment( RevisionRecord::RAW )
+			);
+		$revisionRow += $commentFields;
+
+		list( $actorFields, $actorCallback ) =
+			$this->actorMigration->getInsertValuesWithTempTable(
+				$dbw,
+				'rev_user',
+				$rev->getUser( RevisionRecord::RAW )
+			);
+		$revisionRow += $actorFields;
+
+		$dbw->insert( 'revision', $revisionRow, __METHOD__ );
+
+		if ( !isset( $revisionRow['rev_id'] ) ) {
+			// only if auto-increment was used
+			$revisionRow['rev_id'] = intval( $dbw->insertId() );
+		}
+
+		$commentCallback( $revisionRow['rev_id'] );
+		$actorCallback( $revisionRow['rev_id'], $revisionRow );
+
+		return $revisionRow;
+	}
+
+	/**
+	 * @param IDatabase $dbw
+	 * @param RevisionRecord $rev
+	 * @param Title $title
+	 * @param int $parentId
+	 *
+	 * @return array [ 0 => array $revisionRow, 1 => callable  ]
+	 * @throws MWException
+	 * @throws MWUnknownContentModelException
+	 */
+	private function getBaseRevisionRow(
+		IDatabase $dbw,
+		RevisionRecord $rev,
+		Title $title,
+		$parentId
+	) {
+		// Record the edit in revisions
+		$revisionRow = [
+			'rev_page'       => $rev->getPageId(),
+			'rev_parent_id'  => $parentId,
+			'rev_minor_edit' => $rev->isMinor() ? 1 : 0,
+			'rev_timestamp'  => $dbw->timestamp( $rev->getTimestamp() ),
+			'rev_deleted'    => $rev->getVisibility(),
+			'rev_len'        => $rev->getSize(),
+			'rev_sha1'       => $rev->getSha1(),
+		];
+
+		if ( $rev->getId() !== null ) {
+			// Needed to restore revisions with their original ID
+			$revisionRow['rev_id'] = $rev->getId();
+		}
+
+		if ( $this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_OLD ) ) {
+			// In non MCR mode this IF section will relate to the main slot
+			$mainSlot = $rev->getSlot( 'main' );
+			$model = $mainSlot->getModel();
+			$format = $mainSlot->getFormat();
+
+			// MCR migration note: rev_content_model and rev_content_format will go away
+			if ( $this->contentHandlerUseDB ) {
+				$defaultModel = ContentHandler::getDefaultModelFor( $title );
+				$defaultFormat = ContentHandler::getForModelID( $defaultModel )->getDefaultFormat();
+
+				$revisionRow['rev_content_model'] = ( $model === $defaultModel ) ? null : $model;
+				$revisionRow['rev_content_format'] = ( $format === $defaultFormat ) ? null : $format;
+			}
+		}
+
+		return $revisionRow;
+	}
+
+	/**
+	 * @param SlotRecord $slot
+	 * @param Title $title
+	 * @param array $blobHints See the BlobStore::XXX_HINT constants
+	 *
+	 * @throws MWException
+	 * @return string the blob address
+	 */
+	private function storeContentBlob(
+		SlotRecord $slot,
+		Title $title,
+		array $blobHints = []
+	) {
+		$content = $slot->getContent();
+		$format = $content->getDefaultFormat();
+		$model = $content->getModel();
+
+		$this->checkContent( $content, $title );
+
+		return $this->blobStore->storeBlob(
+			$content->serialize( $format ),
+			// These hints "leak" some information from the higher abstraction layer to
+			// low level storage to allow for optimization.
+			array_merge(
+				$blobHints,
+				[
+					BlobStore::DESIGNATION_HINT => 'page-content',
+					BlobStore::ROLE_HINT => $slot->getRole(),
+					BlobStore::SHA1_HINT => $slot->getSha1(),
+					BlobStore::MODEL_HINT => $model,
+					BlobStore::FORMAT_HINT => $format,
+				]
+			)
+		);
+	}
+
+	/**
+	 * @param SlotRecord $slot
+	 * @param IDatabase $dbw
+	 * @param int $revisionId
+	 * @param int $contentId
+	 */
+	private function insertSlotRowOn( SlotRecord $slot, IDatabase $dbw, $revisionId, $contentId ) {
+		$slotRow = [
+			'slot_revision_id' => $revisionId,
+			'slot_role_id' => $this->slotRoleStore->acquireId( $slot->getRole() ),
+			'slot_content_id' => $contentId,
+			// If the slot has a specific origin use that ID, otherwise use the ID of the revision
+			// that we just inserted.
+			'slot_origin' => $slot->hasOrigin() ? $slot->getOrigin() : $revisionId,
+		];
+		$dbw->insert( 'slots', $slotRow, __METHOD__ );
+	}
+
+	/**
+	 * @param SlotRecord $slot
+	 * @param IDatabase $dbw
+	 * @param string $blobAddress
+	 * @return int content row ID
+	 */
+	private function insertContentRowOn( SlotRecord $slot, IDatabase $dbw, $blobAddress ) {
+		$contentRow = [
+			'content_size' => $slot->getSize(),
+			'content_sha1' => $slot->getSha1(),
+			'content_model' => $this->contentModelStore->acquireId( $slot->getModel() ),
+			'content_address' => $blobAddress,
+		];
+		$dbw->insert( 'content', $contentRow, __METHOD__ );
+		return intval( $dbw->insertId() );
 	}
 
 	/**
@@ -439,7 +866,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @throws MWException
 	 * @throws MWUnknownContentModelException
 	 */
-	private function checkContentModel( Content $content, Title $title ) {
+	private function checkContent( Content $content, Title $title ) {
 		// Note: may return null for revisions that have not yet been inserted
 
 		$model = $content->getModel();
@@ -490,16 +917,21 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * Such revisions can for instance identify page rename
 	 * operations and other such meta-modifications.
 	 *
+	 * @note: This method grabs a FOR UPDATE lock on the relevant row of the page table,
+	 * to prevent a new revision from being inserted before the null revision has been written
+	 * to the database.
+	 *
 	 * MCR migration note: this replaces Revision::newNullRevision
 	 *
 	 * @todo Introduce newFromParentRevision(). newNullRevision can then be based on that
 	 * (or go away).
 	 *
-	 * @param IDatabase $dbw
+	 * @param IDatabase $dbw used for obtaining the lock on the page table row
 	 * @param Title $title Title of the page to read from
 	 * @param CommentStoreComment $comment RevisionRecord's summary
 	 * @param bool $minor Whether the revision should be considered as minor
 	 * @param User $user The user to attribute the revision to
+	 *
 	 * @return RevisionRecord|null RevisionRecord or null on error
 	 */
 	public function newNullRevision(
@@ -511,54 +943,39 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	) {
 		$this->checkDatabaseWikiId( $dbw );
 
-		$fields = [ 'page_latest', 'page_namespace', 'page_title',
-			'rev_id', 'rev_text_id', 'rev_len', 'rev_sha1' ];
-
-		if ( $this->contentHandlerUseDB ) {
-			$fields[] = 'rev_content_model';
-			$fields[] = 'rev_content_format';
-		}
-
-		$current = $dbw->selectRow(
-			[ 'page', 'revision' ],
-			$fields,
-			[
-				'page_id' => $title->getArticleID(),
-				'page_latest=rev_id',
-			],
+		// T51581: Lock the page table row to ensure no other process
+		// is adding a revision to the page at the same time.
+		// Avoid locking extra tables, compare T191892.
+		$pageLatest = $dbw->selectField(
+			'page',
+			'page_latest',
+			[ 'page_id' => $title->getArticleID() ],
 			__METHOD__,
-			[ 'FOR UPDATE' ] // T51581
+			[ 'FOR UPDATE' ]
 		);
 
-		if ( $current ) {
-			$fields = [
-				'page'       => $title->getArticleID(),
-				'user_text'  => $user->getName(),
-				'user'       => $user->getId(),
-				'comment'    => $comment,
-				'minor_edit' => $minor,
-				'text_id'    => $current->rev_text_id,
-				'parent_id'  => $current->page_latest,
-				'len'        => $current->rev_len,
-				'sha1'       => $current->rev_sha1
-			];
-
-			if ( $this->contentHandlerUseDB ) {
-				$fields['content_model'] = $current->rev_content_model;
-				$fields['content_format'] = $current->rev_content_format;
-			}
-
-			$fields['title'] = Title::makeTitle( $current->page_namespace, $current->page_title );
-
-			$mainSlot = $this->emulateMainSlot_1_29( $fields, 0, $title );
-			$revision = new MutableRevisionRecord( $title, $this->wikiId );
-			$this->initializeMutableRevisionFromArray( $revision, $fields );
-			$revision->setSlot( $mainSlot );
-		} else {
-			$revision = null;
+		if ( !$pageLatest ) {
+			return null;
 		}
 
-		return $revision;
+		// Fetch the actual revision row from master, without locking all extra tables.
+		$oldRevision = $this->loadRevisionFromConds(
+			$dbw,
+			[ 'rev_id' => intval( $pageLatest ) ],
+			self::READ_LATEST,
+			$title
+		);
+
+		// Construct the new revision
+		$timestamp = wfTimestampNow(); // TODO: use a callback, so we can override it for testing.
+		$newRevision = MutableRevisionRecord::newFromParentRevision( $oldRevision );
+
+		$newRevision->setComment( $comment );
+		$newRevision->setUser( $user );
+		$newRevision->setTimestamp( $timestamp );
+		$newRevision->setMinorEdit( $minor );
+
+		return $newRevision;
 	}
 
 	/**
@@ -572,7 +989,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 */
 	public function getRcIdIfUnpatrolled( RevisionRecord $rev ) {
 		$rc = $this->getRecentChange( $rev );
-		if ( $rc && $rc->getAttribute( 'rc_patrolled' ) == 0 ) {
+		if ( $rc && $rc->getAttribute( 'rc_patrolled' ) == RecentChange::PRC_UNPATROLLED ) {
 			return $rc->getAttribute( 'rc_id' );
 		} else {
 			return 0;
@@ -593,9 +1010,8 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @return null|RecentChange
 	 */
 	public function getRecentChange( RevisionRecord $rev, $flags = 0 ) {
-		$dbr = $this->getDBConnection( DB_REPLICA );
-
 		list( $dbType, ) = DBAccessObjectUtils::getDBOptions( $flags );
+		$db = $this->getDBConnection( $dbType );
 
 		$userIdentity = $rev->getUser( RevisionRecord::RAW );
 
@@ -606,17 +1022,18 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 		}
 
 		// TODO: Select by rc_this_oldid alone - but as of Nov 2017, there is no index on that!
+		$actorWhere = $this->actorMigration->getWhere( $db, 'rc_user', $rev->getUser(), false );
 		$rc = RecentChange::newFromConds(
 			[
-				'rc_user_text' => $userIdentity->getName(),
-				'rc_timestamp' => $dbr->timestamp( $rev->getTimestamp() ),
+				$actorWhere['conds'],
+				'rc_timestamp' => $db->timestamp( $rev->getTimestamp() ),
 				'rc_this_oldid' => $rev->getId()
 			],
 			__METHOD__,
 			$dbType
 		);
 
-		$this->releaseDBConnection( $dbr );
+		$this->releaseDBConnection( $db );
 
 		// XXX: cache this locally? Glue it to the RevisionRecord?
 		return $rc;
@@ -643,6 +1060,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			'ar_timestamp'      => 'rev_timestamp',
 			'ar_user_text'      => 'rev_user_text',
 			'ar_user'           => 'rev_user',
+			'ar_actor'          => 'rev_actor',
 			'ar_minor_edit'     => 'rev_minor_edit',
 			'ar_deleted'        => 'rev_deleted',
 			'ar_len'            => 'rev_len',
@@ -657,11 +1075,6 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			'ar_content_format' => 'rev_content_format',
 			'ar_content_model'  => 'rev_content_model',
 		];
-
-		if ( empty( $archiveRow->ar_text_id ) ) {
-			$fieldMap['ar_text'] = 'old_text';
-			$fieldMap['ar_flags'] = 'old_flags';
-		}
 
 		$revRow = new stdClass();
 		foreach ( $fieldMap as $arKey => $revKey ) {
@@ -686,22 +1099,36 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	private function emulateMainSlot_1_29( $row, $queryFlags, Title $title ) {
 		$mainSlotRow = new stdClass();
 		$mainSlotRow->role_name = 'main';
+		$mainSlotRow->model_name = null;
+		$mainSlotRow->slot_revision_id = null;
+		$mainSlotRow->content_address = null;
 
 		$content = null;
 		$blobData = null;
 		$blobFlags = null;
 
 		if ( is_object( $row ) ) {
+			if ( $this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_NEW ) ) {
+				// Don't emulate from a row when using the new schema.
+				// Emulating from an array is still OK.
+				throw new LogicException( 'Can\'t emulate the main slot when using MCR schema.' );
+			}
+
 			// archive row
-			if ( !isset( $row->rev_id ) && isset( $row->ar_user ) ) {
+			if ( !isset( $row->rev_id ) && ( isset( $row->ar_user ) || isset( $row->ar_actor ) ) ) {
 				$row = $this->mapArchiveFields( $row );
 			}
 
 			if ( isset( $row->rev_text_id ) && $row->rev_text_id > 0 ) {
-				$mainSlotRow->cont_address = 'tt:' . $row->rev_text_id;
-			} elseif ( isset( $row->ar_id ) ) {
-				$mainSlotRow->cont_address = 'ar:' . $row->ar_id;
+				$mainSlotRow->content_address = SqlBlobStore::makeAddressFromTextId(
+					$row->rev_text_id
+				);
 			}
+
+			// This is used by null-revisions
+			$mainSlotRow->slot_origin = isset( $row->slot_origin )
+				? intval( $row->slot_origin )
+				: null;
 
 			if ( isset( $row->old_text ) ) {
 				// this happens when the text-table gets joined directly, in the pre-1.30 schema
@@ -710,13 +1137,13 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 				if ( !property_exists( $row, 'old_flags' ) ) {
 					throw new InvalidArgumentException( 'old_flags was not set in $row' );
 				}
-				$blobFlags = ( $row->old_flags === null ) ? '' : $row->old_flags;
+				$blobFlags = $row->old_flags ?? '';
 			}
 
-			$mainSlotRow->slot_revision = intval( $row->rev_id );
+			$mainSlotRow->slot_revision_id = intval( $row->rev_id );
 
-			$mainSlotRow->cont_size = isset( $row->rev_len ) ? intval( $row->rev_len ) : null;
-			$mainSlotRow->cont_sha1 = isset( $row->rev_sha1 ) ? strval( $row->rev_sha1 ) : null;
+			$mainSlotRow->content_size = isset( $row->rev_len ) ? intval( $row->rev_len ) : null;
+			$mainSlotRow->content_sha1 = isset( $row->rev_sha1 ) ? strval( $row->rev_sha1 ) : null;
 			$mainSlotRow->model_name = isset( $row->rev_content_model )
 				? strval( $row->rev_content_model )
 				: null;
@@ -725,13 +1152,16 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 				? strval( $row->rev_content_format )
 				: null;
 		} elseif ( is_array( $row ) ) {
-			$mainSlotRow->slot_revision = isset( $row['id'] ) ? intval( $row['id'] ) : null;
+			$mainSlotRow->slot_revision_id = isset( $row['id'] ) ? intval( $row['id'] ) : null;
 
-			$mainSlotRow->cont_address = isset( $row['text_id'] )
-				? 'tt:' . intval( $row['text_id'] )
+			$mainSlotRow->slot_origin = isset( $row['slot_origin'] )
+				? intval( $row['slot_origin'] )
 				: null;
-			$mainSlotRow->cont_size = isset( $row['len'] ) ? intval( $row['len'] ) : null;
-			$mainSlotRow->cont_sha1 = isset( $row['sha1'] ) ? strval( $row['sha1'] ) : null;
+			$mainSlotRow->content_address = isset( $row['text_id'] )
+				? SqlBlobStore::makeAddressFromTextId( intval( $row['text_id'] ) )
+				: null;
+			$mainSlotRow->content_size = isset( $row['len'] ) ? intval( $row['len'] ) : null;
+			$mainSlotRow->content_sha1 = isset( $row['sha1'] ) ? strval( $row['sha1'] ) : null;
 
 			$mainSlotRow->model_name = isset( $row['content_model'] )
 				? strval( $row['content_model'] ) : null;  // XXX: must be a string!
@@ -764,9 +1194,11 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			throw new MWException( 'Revision constructor passed invalid row format.' );
 		}
 
-		// With the old schema, the content changes with every revision.
-		// ...except for null-revisions. Would be nice if we could detect them.
-		$mainSlotRow->slot_inherited = 0;
+		// With the old schema, the content changes with every revision,
+		// except for null-revisions.
+		if ( !isset( $mainSlotRow->slot_origin ) ) {
+			$mainSlotRow->slot_origin = $mainSlotRow->slot_revision_id;
+		}
 
 		if ( $mainSlotRow->model_name === null ) {
 			$mainSlotRow->model_name = function ( SlotRecord $slot ) use ( $title ) {
@@ -777,6 +1209,9 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 		}
 
 		if ( !$content ) {
+			// XXX: We should perhaps fail if $blobData is null and $mainSlotRow->content_address
+			// is missing, but "empty revisions" with no content are used in some edge cases.
+
 			$content = function ( SlotRecord $slot )
 				use ( $blobData, $blobFlags, $queryFlags, $mainSlotRow )
 			{
@@ -789,6 +1224,15 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 				);
 			};
 		}
+
+		// NOTE: this callback will be looped through RevisionSlot::newInherited(), allowing
+		// the inherited slot to have the same content_id as the original slot. In that case,
+		// $slot will be the inherited slot, while $mainSlotRow still refers to the original slot.
+		$mainSlotRow->slot_content_id =
+			function ( SlotRecord $slot ) use ( $queryFlags, $mainSlotRow ) {
+				$db = $this->getDBConnectionRefForQueryFlags( $queryFlags );
+				return $this->findSlotContentId( $db, $mainSlotRow->slot_revision_id, 'main' );
+			};
 
 		return new SlotRecord( $mainSlotRow, $content );
 	}
@@ -804,11 +1248,12 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @param SlotRecord $slot The SlotRecord to load content for
 	 * @param string|null $blobData The content blob, in the form indicated by $blobFlags
 	 * @param string|null $blobFlags Flags indicating how $blobData needs to be processed.
-	 *  null if no processing should happen.
+	 *        Use null if no processing should happen. That is in constrast to the empty string,
+	 *        which causes the blob to be decoded according to the configured legacy encoding.
 	 * @param string|null $blobFormat MIME type indicating how $dataBlob is encoded
 	 * @param int $queryFlags
 	 *
-	 * @throw RevisionAccessException
+	 * @throws RevisionAccessException
 	 * @return Content
 	 */
 	private function loadSlotContent(
@@ -825,6 +1270,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			$cacheKey = $slot->hasAddress() ? $slot->getAddress() : null;
 
 			if ( $blobFlags === null ) {
+				// No blob flags, so use the blob verbatim.
 				$data = $blobData;
 			} else {
 				$data = $this->blobStore->expandBlob( $blobData, $blobFlags, $cacheKey );
@@ -906,12 +1352,11 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			// and fall back to master. The assumption is that we only want to force the fallback
 			// if we are quite sure the revision exists because the caller supplied a revision ID.
 			// If the page isn't found at all on a replica, it probably simply does not exist.
-			$db = $this->getDBConnection( ( $flags & self::READ_LATEST ) ? DB_MASTER : DB_REPLICA );
+			$db = $this->getDBConnectionRefForQueryFlags( $flags );
 
 			$conds[] = 'rev_id=page_latest';
 			$rev = $this->loadRevisionFromConds( $db, $conds, $flags );
 
-			$this->releaseDBConnection( $db );
 			return $rev;
 		}
 	}
@@ -948,12 +1393,11 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			// and fall back to master. The assumption is that we only want to force the fallback
 			// if we are quite sure the revision exists because the caller supplied a revision ID.
 			// If the page isn't found at all on a replica, it probably simply does not exist.
-			$db = $this->getDBConnection( ( $flags & self::READ_LATEST ) ? DB_MASTER : DB_REPLICA );
+			$db = $this->getDBConnectionRefForQueryFlags( $flags );
 
 			$conds[] = 'rev_id=page_latest';
 			$rev = $this->loadRevisionFromConds( $db, $conds, $flags );
 
-			$this->releaseDBConnection( $db );
 			return $rev;
 		}
 	}
@@ -970,15 +1414,93 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @return RevisionRecord|null
 	 */
 	public function getRevisionByTimestamp( $title, $timestamp ) {
+		$db = $this->getDBConnection( DB_REPLICA );
 		return $this->newRevisionFromConds(
 			[
-				'rev_timestamp' => $timestamp,
+				'rev_timestamp' => $db->timestamp( $timestamp ),
 				'page_namespace' => $title->getNamespace(),
 				'page_title' => $title->getDBkey()
 			],
 			0,
 			$title
 		);
+	}
+
+	/**
+	 * @param int $revId The revision to load slots for.
+	 * @param int $queryFlags
+	 *
+	 * @return SlotRecord[]
+	 */
+	private function loadSlotRecords( $revId, $queryFlags ) {
+		$revQuery = self::getSlotsQueryInfo( [ 'content' ] );
+
+		list( $dbMode, $dbOptions ) = DBAccessObjectUtils::getDBOptions( $queryFlags );
+		$db = $this->getDBConnectionRef( $dbMode );
+
+		$res = $db->select(
+			$revQuery['tables'],
+			$revQuery['fields'],
+			[
+				'slot_revision_id' => $revId,
+			],
+			__METHOD__,
+			$dbOptions,
+			$revQuery['joins']
+		);
+
+		$slots = [];
+
+		foreach ( $res as $row ) {
+			$contentCallback = function ( SlotRecord $slot ) use ( $queryFlags, $row ) {
+				return $this->loadSlotContent( $slot, null, null, null, $queryFlags );
+			};
+
+			$slots[$row->role_name] = new SlotRecord( $row, $contentCallback );
+		}
+
+		if ( !isset( $slots['main'] ) ) {
+			throw new RevisionAccessException(
+				'Main slot of revision ' . $revId . ' not found in database!'
+			);
+		};
+
+		return $slots;
+	}
+
+	/**
+	 * Factory method for RevisionSlots.
+	 *
+	 * @note If other code has a need to construct RevisionSlots objects, this should be made
+	 * public, since RevisionSlots instances should not be constructed directly.
+	 *
+	 * @param int $revId
+	 * @param object $revisionRow
+	 * @param int $queryFlags
+	 * @param Title $title
+	 *
+	 * @return RevisionSlots
+	 * @throws MWException
+	 */
+	private function newRevisionSlots(
+		$revId,
+		$revisionRow,
+		$queryFlags,
+		Title $title
+	) {
+		if ( !$this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_NEW ) ) {
+			$mainSlot = $this->emulateMainSlot_1_29( $revisionRow, $queryFlags, $title );
+			$slots = new RevisionSlots( [ 'main' => $mainSlot ] );
+		} else {
+			// XXX: do we need the same kind of caching here
+			// that getKnownCurrentRevision uses (if $revId == page_latest?)
+
+			$slots = new RevisionSlots( function () use( $revId, $queryFlags ) {
+				return $this->loadSlotRecords( $revId, $queryFlags );
+			} );
+		}
+
+		return $slots;
 	}
 
 	/**
@@ -1032,86 +1554,24 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			$row->$field = $value;
 		}
 
-		$user = $this->getUserIdentityFromRowObject( $row, 'ar_' );
+		try {
+			$user = User::newFromAnyId(
+				$row->ar_user ?? null,
+				$row->ar_user_text ?? null,
+				$row->ar_actor ?? null
+			);
+		} catch ( InvalidArgumentException $ex ) {
+			wfWarn( __METHOD__ . ': ' . $ex->getMessage() );
+			$user = new UserIdentityValue( 0, '', 0 );
+		}
 
-		$comment = CommentStore::newKey( 'ar_comment' )
-			// Legacy because $row may have come from self::selectFields()
-			->getCommentLegacy( $this->getDBConnection( DB_REPLICA ), $row, true );
+		$db = $this->getDBConnectionRefForQueryFlags( $queryFlags );
+		// Legacy because $row may have come from self::selectFields()
+		$comment = $this->commentStore->getCommentLegacy( $db, 'ar_comment', $row, true );
 
-		$mainSlot = $this->emulateMainSlot_1_29( $row, $queryFlags, $title );
-		$slots = new RevisionSlots( [ 'main' => $mainSlot ] );
+		$slots = $this->newRevisionSlots( $row->ar_rev_id, $row, $queryFlags, $title );
 
 		return new RevisionArchiveRecord( $title, $user, $comment, $row, $slots, $this->wikiId );
-	}
-
-	/**
-	 * @param object $row
-	 * @param string $prefix Field prefix, such as 'rev_' or 'ar_'.
-	 *
-	 * @return UserIdentityValue
-	 */
-	private function getUserIdentityFromRowObject( $row, $prefix = 'rev_' ) {
-		$idField = "{$prefix}user";
-		$nameField = "{$prefix}user_text";
-
-		$userId = intval( $row->$idField );
-
-		if ( isset( $row->user_name ) ) {
-			$userName = $row->user_name;
-		} elseif ( isset( $row->$nameField ) ) {
-			$userName = $row->$nameField;
-		} else {
-			$userName = User::whoIs( $userId );
-		}
-
-		if ( $userName === false ) {
-			wfWarn( __METHOD__ . ': Cannot determine user name for user ID ' . $userId );
-			$userName = '';
-		}
-
-		return new UserIdentityValue( $userId, $userName );
-	}
-
-	/**
-	 * @see RevisionFactory::newRevisionFromRow_1_29
-	 *
-	 * MCR migration note: this replaces Revision::newFromRow
-	 *
-	 * @param object $row
-	 * @param int $queryFlags
-	 * @param Title|null $title
-	 *
-	 * @return RevisionRecord
-	 * @throws MWException
-	 * @throws RevisionAccessException
-	 */
-	private function newRevisionFromRow_1_29( $row, $queryFlags = 0, Title $title = null ) {
-		Assert::parameterType( 'object', $row, '$row' );
-
-		if ( !$title ) {
-			$pageId = isset( $row->rev_page ) ? $row->rev_page : 0; // XXX: also check page_id?
-			$revId = isset( $row->rev_id ) ? $row->rev_id : 0;
-
-			$title = $this->getTitle( $pageId, $revId, $queryFlags );
-		}
-
-		if ( !isset( $row->page_latest ) ) {
-			$row->page_latest = $title->getLatestRevID();
-			if ( $row->page_latest === 0 && $title->exists() ) {
-				wfWarn( 'Encountered title object in limbo: ID ' . $title->getArticleID() );
-			}
-		}
-
-		$user = $this->getUserIdentityFromRowObject( $row );
-
-		$comment = CommentStore::newKey( 'rev_comment' )
-			// Legacy because $row may have come from self::selectFields()
-			->getCommentLegacy( $this->getDBConnection( DB_REPLICA ), $row, true );
-
-		$mainSlot = $this->emulateMainSlot_1_29( $row, $queryFlags, $title );
-		$slots = new RevisionSlots( [ 'main' => $mainSlot ] );
-
-		return new RevisionStoreRecord( $title, $user, $comment, $row, $slots, $this->wikiId );
 	}
 
 	/**
@@ -1126,7 +1586,40 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @return RevisionRecord
 	 */
 	public function newRevisionFromRow( $row, $queryFlags = 0, Title $title = null ) {
-		return $this->newRevisionFromRow_1_29( $row, $queryFlags, $title );
+		Assert::parameterType( 'object', $row, '$row' );
+
+		if ( !$title ) {
+			$pageId = $row->rev_page ?? 0; // XXX: also check page_id?
+			$revId = $row->rev_id ?? 0;
+
+			$title = $this->getTitle( $pageId, $revId, $queryFlags );
+		}
+
+		if ( !isset( $row->page_latest ) ) {
+			$row->page_latest = $title->getLatestRevID();
+			if ( $row->page_latest === 0 && $title->exists() ) {
+				wfWarn( 'Encountered title object in limbo: ID ' . $title->getArticleID() );
+			}
+		}
+
+		try {
+			$user = User::newFromAnyId(
+				$row->rev_user ?? null,
+				$row->rev_user_text ?? null,
+				$row->rev_actor ?? null
+			);
+		} catch ( InvalidArgumentException $ex ) {
+			wfWarn( __METHOD__ . ': ' . $ex->getMessage() );
+			$user = new UserIdentityValue( 0, '', 0 );
+		}
+
+		$db = $this->getDBConnectionRefForQueryFlags( $queryFlags );
+		// Legacy because $row may have come from self::selectFields()
+		$comment = $this->commentStore->getCommentLegacy( $db, 'rev_comment', $row, true );
+
+		$slots = $this->newRevisionSlots( $row->rev_id, $row, $queryFlags, $title );
+
+		return new RevisionStoreRecord( $title, $user, $comment, $row, $slots, $this->wikiId );
 	}
 
 	/**
@@ -1157,8 +1650,8 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 		}
 
 		if ( !$title ) {
-			$pageId = isset( $fields['page'] ) ? $fields['page'] : 0;
-			$revId = isset( $fields['id'] ) ? $fields['id'] : 0;
+			$pageId = $fields['page'] ?? 0;
+			$revId = $fields['id'] ?? 0;
 
 			$title = $this->getTitle( $pageId, $revId, $queryFlags );
 		}
@@ -1169,36 +1662,23 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 
 		// if we have a content object, use it to set the model and type
 		if ( !empty( $fields['content'] ) ) {
-			if ( !( $fields['content'] instanceof Content ) ) {
-				throw new MWException( 'content field must contain a Content object.' );
-			}
-
-			if ( !empty( $fields['text_id'] ) ) {
+			if ( !( $fields['content'] instanceof Content ) && !is_array( $fields['content'] ) ) {
 				throw new MWException(
-					"Text already stored in external store (id {$fields['text_id']}), " .
-					"can't serialize content object"
+					'content field must contain a Content object or an array of Content objects.'
 				);
 			}
 		}
 
-		// Replaces old lazy loading logic in Revision::getUserText.
-		if ( !isset( $fields['user_text'] ) && isset( $fields['user'] ) ) {
-			if ( $fields['user'] instanceof UserIdentity ) {
-				/** @var User $user */
-				$user = $fields['user'];
-				$fields['user_text'] = $user->getName();
-				$fields['user'] = $user->getId();
-			} else {
-				// TODO: wrap this in a callback to make it lazy again.
-				$name = $fields['user'] === 0 ? false : User::whoIs( $fields['user'] );
+		if ( !empty( $fields['text_id'] ) ) {
+			if ( !$this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_OLD ) ) {
+				throw new MWException( "The text_id field is only available in the pre-MCR schema" );
+			}
 
-				if ( $name === false ) {
-					throw new MWException(
-						'user_text not given, and unknown user ID ' . $fields['user']
-					);
-				}
-
-				$fields['user_text'] = $name;
+			if ( !empty( $fields['content'] ) ) {
+				throw new MWException(
+					"Text already stored in external store (id {$fields['text_id']}), " .
+					"can't specify content object"
+				);
 			}
 		}
 
@@ -1206,7 +1686,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			isset( $fields['comment'] )
 			&& !( $fields['comment'] instanceof CommentStoreComment )
 		) {
-			$commentData = isset( $fields['comment_data'] ) ? $fields['comment_data'] : null;
+			$commentData = $fields['comment_data'] ?? null;
 
 			if ( $fields['comment'] instanceof Message ) {
 				$fields['comment'] = CommentStoreComment::newUnsavedComment(
@@ -1222,11 +1702,17 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			}
 		}
 
-		$mainSlot = $this->emulateMainSlot_1_29( $fields, $queryFlags, $title );
-
 		$revision = new MutableRevisionRecord( $title, $this->wikiId );
 		$this->initializeMutableRevisionFromArray( $revision, $fields );
-		$revision->setSlot( $mainSlot );
+
+		if ( isset( $fields['content'] ) && is_array( $fields['content'] ) ) {
+			foreach ( $fields['content'] as $role => $content ) {
+				$revision->setContent( $role, $content );
+			}
+		} else {
+			$mainSlot = $this->emulateMainSlot_1_29( $fields, $queryFlags, $title );
+			$revision->setSlot( $mainSlot );
+		}
 
 		return $revision;
 	}
@@ -1244,16 +1730,15 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 
 		if ( isset( $fields['user'] ) && ( $fields['user'] instanceof UserIdentity ) ) {
 			$user = $fields['user'];
-		} elseif ( isset( $fields['user'] ) && isset( $fields['user_text'] ) ) {
-			$user = new UserIdentityValue( intval( $fields['user'] ), $fields['user_text'] );
-		} elseif ( isset( $fields['user'] ) ) {
-			$user = User::newFromId( intval( $fields['user'] ) );
-		} elseif ( isset( $fields['user_text'] ) ) {
-			$user = User::newFromName( $fields['user_text'] );
-
-			// User::newFromName will return false for IP addresses (and invalid names)
-			if ( $user == false ) {
-				$user = new UserIdentityValue( 0, $fields['user_text'] );
+		} else {
+			try {
+				$user = User::newFromAnyId(
+					$fields['user'] ?? null,
+					$fields['user_text'] ?? null,
+					$fields['actor'] ?? null
+				);
+			} catch ( InvalidArgumentException $ex ) {
+				$user = null;
 			}
 		}
 
@@ -1418,14 +1903,13 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 *
 	 * @param array $conditions
 	 * @param int $flags (optional)
-	 * @param Title $title
+	 * @param Title|null $title
 	 *
 	 * @return RevisionRecord|null
 	 */
 	private function newRevisionFromConds( $conditions, $flags = 0, Title $title = null ) {
-		$db = $this->getDBConnection( ( $flags & self::READ_LATEST ) ? DB_MASTER : DB_REPLICA );
+		$db = $this->getDBConnectionRefForQueryFlags( $flags );
 		$rev = $this->loadRevisionFromConds( $db, $conditions, $flags, $title );
-		$this->releaseDBConnection( $db );
 
 		$lb = $this->getDBLoadBalancer();
 
@@ -1437,9 +1921,9 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			&& $lb->hasOrMadeRecentMasterChanges()
 		) {
 			$flags = self::READ_LATEST;
-			$db = $this->getDBConnection( DB_MASTER );
-			$rev = $this->loadRevisionFromConds( $db, $conditions, $flags, $title );
-			$this->releaseDBConnection( $db );
+			$dbw = $this->getDBConnection( DB_MASTER );
+			$rev = $this->loadRevisionFromConds( $dbw, $conditions, $flags, $title );
+			$this->releaseDBConnection( $dbw );
 		}
 
 		return $rev;
@@ -1454,7 +1938,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @param IDatabase $db
 	 * @param array $conditions
 	 * @param int $flags (optional)
-	 * @param Title $title
+	 * @param Title|null $title
 	 *
 	 * @return RevisionRecord|null
 	 */
@@ -1524,7 +2008,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	private function fetchRevisionRowFromConds( IDatabase $db, $conditions, $flags = 0 ) {
 		$this->checkDatabaseWikiId( $db );
 
-		$revQuery = self::getQueryInfo( [ 'page', 'user' ] );
+		$revQuery = $this->getQueryInfo( [ 'page', 'user' ] );
 		$options = [];
 		if ( ( $flags & self::READ_LOCKING ) == self::READ_LOCKING ) {
 			$options[] = 'FOR UPDATE';
@@ -1540,17 +2024,58 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	}
 
 	/**
+	 * Finds the ID of a content row for a given revision and slot role.
+	 * This can be used to re-use content rows even while the content ID
+	 * is still missing from SlotRecords, when writing to both the old and
+	 * the new schema during MCR schema migration.
+	 *
+	 * @todo remove after MCR schema migration is complete.
+	 *
+	 * @param IDatabase $db
+	 * @param int $revId
+	 * @param string $role
+	 *
+	 * @return int|null
+	 */
+	private function findSlotContentId( IDatabase $db, $revId, $role ) {
+		if ( !$this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_NEW ) ) {
+			return null;
+		}
+
+		try {
+			$roleId = $this->slotRoleStore->getId( $role );
+			$conditions = [
+				'slot_revision_id' => $revId,
+				'slot_role_id' => $roleId,
+			];
+
+			$contentId = $db->selectField( 'slots', 'slot_content_id', $conditions, __METHOD__ );
+
+			return $contentId ?: null;
+		} catch ( NameTableAccessException $ex ) {
+			// If the role is missing from the slot_roles table,
+			// the corresponding row in slots cannot exist.
+			return null;
+		}
+	}
+
+	/**
 	 * Return the tables, fields, and join conditions to be selected to create
-	 * a new revision object.
+	 * a new RevisionStoreRecord object.
 	 *
 	 * MCR migration note: this replaces Revision::getQueryInfo
+	 *
+	 * If the format of fields returned changes in any way then the cache key provided by
+	 * self::getRevisionRowCacheKey should be updated.
 	 *
 	 * @since 1.31
 	 *
 	 * @param array $options Any combination of the following strings
 	 *  - 'page': Join with the page table, and select fields to identify the page
 	 *  - 'user': Join with the user table, and select the user name
-	 *  - 'text': Join with the text table, and select fields to load page text
+	 *  - 'text': Join with the text table, and select fields to load page text. This
+	 *    option is deprecated in MW 1.32 when the MCR migration flag SCHEMA_COMPAT_WRITE_NEW
+	 *    is set, and disallowed when SCHEMA_COMPAT_READ_OLD is not set.
 	 *
 	 * @return array With three keys:
 	 *  - tables: (string[]) to include in the `$table` to `IDatabase->select()`
@@ -1568,10 +2093,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 		$ret['fields'] = array_merge( $ret['fields'], [
 			'rev_id',
 			'rev_page',
-			'rev_text_id',
 			'rev_timestamp',
-			'rev_user_text',
-			'rev_user',
 			'rev_minor_edit',
 			'rev_deleted',
 			'rev_len',
@@ -1579,14 +2101,23 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			'rev_sha1',
 		] );
 
-		$commentQuery = CommentStore::newKey( 'rev_comment' )->getJoin();
+		$commentQuery = $this->commentStore->getJoin( 'rev_comment' );
 		$ret['tables'] = array_merge( $ret['tables'], $commentQuery['tables'] );
 		$ret['fields'] = array_merge( $ret['fields'], $commentQuery['fields'] );
 		$ret['joins'] = array_merge( $ret['joins'], $commentQuery['joins'] );
 
-		if ( $this->contentHandlerUseDB ) {
-			$ret['fields'][] = 'rev_content_format';
-			$ret['fields'][] = 'rev_content_model';
+		$actorQuery = $this->actorMigration->getJoin( 'rev_user' );
+		$ret['tables'] = array_merge( $ret['tables'], $actorQuery['tables'] );
+		$ret['fields'] = array_merge( $ret['fields'], $actorQuery['fields'] );
+		$ret['joins'] = array_merge( $ret['joins'], $actorQuery['joins'] );
+
+		if ( $this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_OLD ) ) {
+			$ret['fields'][] = 'rev_text_id';
+
+			if ( $this->contentHandlerUseDB ) {
+				$ret['fields'][] = 'rev_content_format';
+				$ret['fields'][] = 'rev_content_model';
+			}
 		}
 
 		if ( in_array( 'page', $options, true ) ) {
@@ -1607,10 +2138,20 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			$ret['fields'] = array_merge( $ret['fields'], [
 				'user_name',
 			] );
-			$ret['joins']['user'] = [ 'LEFT JOIN', [ 'rev_user != 0', 'user_id = rev_user' ] ];
+			$u = $actorQuery['fields']['rev_user'];
+			$ret['joins']['user'] = [ 'LEFT JOIN', [ "$u != 0", "user_id = $u" ] ];
 		}
 
 		if ( in_array( 'text', $options, true ) ) {
+			if ( !$this->hasMcrSchemaFlags( SCHEMA_COMPAT_WRITE_OLD ) ) {
+				throw new InvalidArgumentException( 'text table can no longer be joined directly' );
+			} elseif ( !$this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_OLD ) ) {
+				// NOTE: even when this class is set to not read from the old schema, callers
+				// should still be able to join against the text table, as long as we are still
+				// writing the old schema for compatibility.
+				wfDeprecated( __METHOD__ . ' with `text` option', '1.32' );
+			}
+
 			$ret['tables'][] = 'text';
 			$ret['fields'] = array_merge( $ret['fields'], [
 				'old_text',
@@ -1624,7 +2165,77 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 
 	/**
 	 * Return the tables, fields, and join conditions to be selected to create
-	 * a new archived revision object.
+	 * a new SlotRecord.
+	 *
+	 * @since 1.32
+	 *
+	 * @param array $options Any combination of the following strings
+	 *  - 'content': Join with the content table, and select content meta-data fields
+	 *
+	 * @return array With three keys:
+	 *  - tables: (string[]) to include in the `$table` to `IDatabase->select()`
+	 *  - fields: (string[]) to include in the `$vars` to `IDatabase->select()`
+	 *  - joins: (array) to include in the `$join_conds` to `IDatabase->select()`
+	 */
+	public function getSlotsQueryInfo( $options = [] ) {
+		$ret = [
+			'tables' => [],
+			'fields' => [],
+			'joins'  => [],
+		];
+
+		if ( $this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_OLD ) ) {
+			$db = $this->getDBConnectionRef( DB_REPLICA );
+			$ret['tables']['slots'] = 'revision';
+
+			$ret['fields']['slot_revision_id'] = 'slots.rev_id';
+			$ret['fields']['slot_content_id'] = 'NULL';
+			$ret['fields']['slot_origin'] = 'slots.rev_id';
+			$ret['fields']['role_name'] = $db->addQuotes( 'main' );
+
+			if ( in_array( 'content', $options, true ) ) {
+				$ret['fields']['content_size'] = 'slots.rev_len';
+				$ret['fields']['content_sha1'] = 'slots.rev_sha1';
+				$ret['fields']['content_address']
+					= $db->buildConcat( [ $db->addQuotes( 'tt:' ), 'slots.rev_text_id' ] );
+
+				if ( $this->contentHandlerUseDB ) {
+					$ret['fields']['model_name'] = 'slots.rev_content_model';
+				} else {
+					$ret['fields']['model_name'] = 'NULL';
+				}
+			}
+		} else {
+			$ret['tables'][] = 'slots';
+			$ret['tables'][] = 'slot_roles';
+			$ret['fields'] = array_merge( $ret['fields'], [
+				'slot_revision_id',
+				'slot_content_id',
+				'slot_origin',
+				'role_name'
+			] );
+			$ret['joins']['slot_roles'] = [ 'INNER JOIN', [ 'slot_role_id = role_id' ] ];
+
+			if ( in_array( 'content', $options, true ) ) {
+				$ret['tables'][] = 'content';
+				$ret['tables'][] = 'content_models';
+				$ret['fields'] = array_merge( $ret['fields'], [
+					'content_size',
+					'content_sha1',
+					'content_address',
+					'model_name'
+				] );
+				$ret['joins']['content'] = [ 'INNER JOIN', [ 'slot_content_id = content_id' ] ];
+				$ret['joins']['content_models'] = [ 'INNER JOIN', [ 'content_model = model_id' ] ];
+			}
+		}
+
+		return $ret;
+	}
+
+	/**
+	 * Return the tables, fields, and join conditions to be selected to create
+	 * a new RevisionArchiveRecord object.
 	 *
 	 * MCR migration note: this replaces Revision::getArchiveQueryInfo
 	 *
@@ -1636,32 +2247,33 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 *   - joins: (array) to include in the `$join_conds` to `IDatabase->select()`
 	 */
 	public function getArchiveQueryInfo() {
-		$commentQuery = CommentStore::newKey( 'ar_comment' )->getJoin();
+		$commentQuery = $this->commentStore->getJoin( 'ar_comment' );
+		$actorQuery = $this->actorMigration->getJoin( 'ar_user' );
 		$ret = [
-			'tables' => [ 'archive' ] + $commentQuery['tables'],
+			'tables' => [ 'archive' ] + $commentQuery['tables'] + $actorQuery['tables'],
 			'fields' => [
 					'ar_id',
 					'ar_page_id',
 					'ar_namespace',
 					'ar_title',
 					'ar_rev_id',
-					'ar_text',
-					'ar_text_id',
 					'ar_timestamp',
-					'ar_user_text',
-					'ar_user',
 					'ar_minor_edit',
 					'ar_deleted',
 					'ar_len',
 					'ar_parent_id',
 					'ar_sha1',
-				] + $commentQuery['fields'],
-			'joins' => $commentQuery['joins'],
+				] + $commentQuery['fields'] + $actorQuery['fields'],
+			'joins' => $commentQuery['joins'] + $actorQuery['joins'],
 		];
 
-		if ( $this->contentHandlerUseDB ) {
-			$ret['fields'][] = 'ar_content_format';
-			$ret['fields'][] = 'ar_content_model';
+		if ( $this->hasMcrSchemaFlags( SCHEMA_COMPAT_READ_OLD ) ) {
+			$ret['fields'][] = 'ar_text_id';
+
+			if ( $this->contentHandlerUseDB ) {
+				$ret['fields'][] = 'ar_content_format';
+				$ret['fields'][] = 'ar_content_model';
+			}
 		}
 
 		return $ret;
@@ -1720,7 +2332,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * MCR migration note: this replaces Revision::getPrevious
 	 *
 	 * @param RevisionRecord $rev
-	 * @param Title $title if known (optional)
+	 * @param Title|null $title if known (optional)
 	 *
 	 * @return RevisionRecord|null
 	 */
@@ -1741,7 +2353,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * MCR migration note: this replaces Revision::getNext
 	 *
 	 * @param RevisionRecord $rev
-	 * @param Title $title if known (optional)
+	 * @param Title|null $title if known (optional)
 	 *
 	 * @return RevisionRecord|null
 	 */
@@ -1802,15 +2414,12 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 	 * @return string|bool False if not found
 	 */
 	public function getTimestampFromId( $title, $id, $flags = 0 ) {
-		$db = $this->getDBConnection(
-			( $flags & IDBAccessObject::READ_LATEST ) ? DB_MASTER : DB_REPLICA
-		);
+		$db = $this->getDBConnectionRefForQueryFlags( $flags );
 
 		$conds = [ 'rev_id' => $id ];
 		$conds['rev_page'] = $title->getArticleID();
 		$timestamp = $db->selectField( 'revision', 'rev_timestamp', $conds, __METHOD__ );
 
-		$this->releaseDBConnection( $db );
 		return ( $timestamp !== false ) ? wfTimestamp( TS_MW, $timestamp ) : false;
 	}
 
@@ -1879,15 +2488,19 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 			return false;
 		}
 
+		$revQuery = $this->getQueryInfo();
 		$res = $db->select(
-			'revision',
-			'rev_user',
+			$revQuery['tables'],
+			[
+				'rev_user' => $revQuery['fields']['rev_user'],
+			],
 			[
 				'rev_page' => $pageId,
 				'rev_timestamp > ' . $db->addQuotes( $db->timestamp( $since ) )
 			],
 			__METHOD__,
-			[ 'ORDER BY' => 'rev_timestamp ASC', 'LIMIT' => 50 ]
+			[ 'ORDER BY' => 'rev_timestamp ASC', 'LIMIT' => 50 ],
+			$revQuery['joins']
 		);
 		foreach ( $res as $row ) {
 			if ( $row->rev_user != $userId ) {
@@ -1933,7 +2546,7 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 
 		$row = $this->cache->getWithSetCallback(
 			// Page/rev IDs passed in from DB to reflect history merges
-			$this->cache->makeGlobalKey( 'revision-row-1.29', $db->getDomainID(), $pageId, $revId ),
+			$this->getRevisionRowCacheKey( $db, $pageId, $revId ),
 			WANObjectCache::TTL_WEEK,
 			function ( $curValue, &$ttl, array &$setOpts ) use ( $db, $pageId, $revId ) {
 				$setOpts += Database::getCacheSetOptions( $db );
@@ -1955,6 +2568,26 @@ class RevisionStore implements IDBAccessObject, RevisionFactory, RevisionLookup 
 		} else {
 			return false;
 		}
+	}
+
+	/**
+	 * Get a cache key for use with a row as selected with getQueryInfo( [ 'page', 'user' ] )
+	 * Caching rows without 'page' or 'user' could lead to issues.
+	 * If the format of the rows returned by the query provided by getQueryInfo changes the
+	 * cache key should be updated to avoid conflicts.
+	 *
+	 * @param IDatabase $db
+	 * @param int $pageId
+	 * @param int $revId
+	 * @return string
+	 */
+	private function getRevisionRowCacheKey( IDatabase $db, $pageId, $revId ) {
+		return $this->cache->makeGlobalKey(
+			self::ROW_CACHE_KEY,
+			$db->getDomainID(),
+			$pageId,
+			$revId
+		);
 	}
 
 	// TODO: move relevant methods from Title here, e.g. getFirstRevision, isBigDeletion, etc.

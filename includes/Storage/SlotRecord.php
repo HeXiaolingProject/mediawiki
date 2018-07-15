@@ -23,6 +23,7 @@
 namespace MediaWiki\Storage;
 
 use Content;
+use InvalidArgumentException;
 use LogicException;
 use OutOfBoundsException;
 use Wikimedia\Assert\Assert;
@@ -37,7 +38,9 @@ use Wikimedia\Assert\Assert;
 class SlotRecord {
 
 	/**
-	 * @var object database result row, as a raw object
+	 * @var object database result row, as a raw object. Callbacks are supported for field values,
+	 *      to enable on-demand emulation of these values. This is primarily intended for use
+	 *      during schema migration.
 	 */
 	private $row;
 
@@ -72,7 +75,8 @@ class SlotRecord {
 	 * @return SlotRecord
 	 */
 	private static function newDerived( SlotRecord $slot, array $overrides = [] ) {
-		$row = $slot->row;
+		$row = clone $slot->row;
+		$row->slot_id = null; // never copy the row ID!
 
 		foreach ( $overrides as $key => $value ) {
 			$row->$key = $value;
@@ -85,39 +89,51 @@ class SlotRecord {
 	 * Constructs a new SlotRecord for a new revision, inheriting the content of the given SlotRecord
 	 * of a previous revision.
 	 *
+	 * Note that a SlotRecord constructed this way are intended as prototypes,
+	 * to be used wit newSaved(). They are incomplete, so some getters such as
+	 * getRevision() will fail.
+	 *
 	 * @param SlotRecord $slot
 	 *
 	 * @return SlotRecord
 	 */
 	public static function newInherited( SlotRecord $slot ) {
+		// Sanity check - we can't inherit from a Slot that's not attached to a revision.
+		$slot->getRevision();
+		$slot->getOrigin();
+		$slot->getAddress();
+
+		// NOTE: slot_origin and content_address are copied from $slot.
 		return self::newDerived( $slot, [
-			'slot_inherited' => true,
-			'slot_revision' => null,
+			'slot_revision_id' => null,
 		] );
 	}
 
 	/**
 	 * Constructs a new Slot from a Content object for a new revision.
 	 * This is the preferred way to construct a slot for storing Content that
-	 * resulted from a user edit.
+	 * resulted from a user edit. The slot is assumed to be not inherited.
+	 *
+	 * Note that a SlotRecord constructed this way are intended as prototypes,
+	 * to be used wit newSaved(). They are incomplete, so some getters such as
+	 * getAddress() will fail.
 	 *
 	 * @param string $role
 	 * @param Content $content
-	 * @param bool $inherited
 	 *
-	 * @return SlotRecord
+	 * @return SlotRecord An incomplete proto-slot object, to be used with newSaved() later.
 	 */
-	public static function newUnsaved( $role, Content $content, $inherited = false ) {
-		Assert::parameterType( 'boolean', $inherited, '$inherited' );
+	public static function newUnsaved( $role, Content $content ) {
 		Assert::parameterType( 'string', $role, '$role' );
 
 		$row = [
 			'slot_id' => null, // not yet known
-			'slot_address' => null, // not yet known. need setter?
-			'slot_revision' => null, // not yet known
-			'slot_inherited' => $inherited,
-			'cont_size' => null, // compute later
-			'cont_sha1' => null, // compute later
+			'slot_revision_id' => null, // not yet known
+			'slot_origin' => null, // not yet known, will be set in newSaved()
+			'content_size' => null, // compute later
+			'content_sha1' => null, // compute later
+			'slot_content_id' => null, // not yet known, will be set in newSaved()
+			'content_address' => null, // not yet known, will be set in newSaved()
 			'role_name' => $role,
 			'model_name' => $content->getModel(),
 		];
@@ -126,23 +142,76 @@ class SlotRecord {
 	}
 
 	/**
-	 * Constructs a SlotRecord for a newly saved revision, based on the proto-slot that was
-	 * supplied to the code that performed the save operation. This adds information that
-	 * has only become available during saving, particularly the revision ID and blob address.
+	 * Constructs a complete SlotRecord for a newly saved revision, based on the incomplete
+	 * proto-slot. This adds information that has only become available during saving,
+	 * particularly the revision ID, content ID and content address.
 	 *
-	 * @param int $revisionId
-	 * @param string $blobAddress
-	 * @param SlotRecord $protoSlot The proto-slot that was provided to the code that then
+	 * @param int $revisionId the revision the slot is to be associated with (field slot_revision_id).
+	 *        If $protoSlot already has a revision, it must be the same.
+	 * @param int|null $contentId the ID of the row in the content table describing the content
+	 *        referenced by $contentAddress (field slot_content_id).
+	 *        If $protoSlot already has a content ID, it must be the same.
+	 * @param string $contentAddress the slot's content address (field content_address).
+	 *        If $protoSlot already has an address, it must be the same.
+	 * @param SlotRecord $protoSlot The proto-slot that was provided as input for creating a new
+	 *        revision. $protoSlot must have a content address if inherited.
 	 *
-	 * @return SlotRecord
+	 * @return SlotRecord If the state of $protoSlot is inappropriate for saving a new revision.
 	 */
-	public static function newSaved( $revisionId, $blobAddress, SlotRecord $protoSlot ) {
+	public static function newSaved(
+		$revisionId,
+		$contentId,
+		$contentAddress,
+		SlotRecord $protoSlot
+	) {
 		Assert::parameterType( 'integer', $revisionId, '$revisionId' );
-		Assert::parameterType( 'string', $blobAddress, '$blobAddress' );
+		// TODO once migration is over $contentId must be an integer
+		Assert::parameterType( 'integer|null', $contentId, '$contentId' );
+		Assert::parameterType( 'string', $contentAddress, '$contentAddress' );
+
+		if ( $protoSlot->hasRevision() && $protoSlot->getRevision() !== $revisionId ) {
+			throw new LogicException(
+				"Mismatching revision ID $revisionId: "
+				. "The slot already belongs to revision {$protoSlot->getRevision()}. "
+				. "Use SlotRecord::newInherited() to re-use content between revisions."
+			);
+		}
+
+		if ( $protoSlot->hasAddress() && $protoSlot->getAddress() !== $contentAddress ) {
+			throw new LogicException(
+				"Mismatching blob address $contentAddress: "
+				. "The slot already has content at {$protoSlot->getAddress()}."
+			);
+		}
+
+		if ( $protoSlot->hasContentId() && $protoSlot->getContentId() !== $contentId ) {
+			throw new LogicException(
+				"Mismatching content ID $contentId: "
+				. "The slot already has content row {$protoSlot->getContentId()} associated."
+			);
+		}
+
+		if ( $protoSlot->isInherited() ) {
+			if ( !$protoSlot->hasAddress() ) {
+				throw new InvalidArgumentException(
+					"An inherited blob should have a content address!"
+				);
+			}
+			if ( !$protoSlot->hasField( 'slot_origin' ) ) {
+				throw new InvalidArgumentException(
+					"A saved inherited slot should have an origin set!"
+				);
+			}
+			$origin = $protoSlot->getOrigin();
+		} else {
+			$origin = $revisionId;
+		}
 
 		return self::newDerived( $protoSlot, [
-			'slot_revision' => $revisionId,
-			'cont_address' => $blobAddress,
+			'slot_revision_id' => $revisionId,
+			'slot_content_id' => $contentId,
+			'slot_origin' => $origin,
+			'content_address' => $contentAddress,
 		] );
 	}
 
@@ -164,6 +233,42 @@ class SlotRecord {
 	public function __construct( $row, $content ) {
 		Assert::parameterType( 'object', $row, '$row' );
 		Assert::parameterType( 'Content|callable', $content, '$content' );
+
+		Assert::parameter(
+			property_exists( $row, 'slot_revision_id' ),
+			'$row->slot_revision_id',
+			'must exist'
+		);
+		Assert::parameter(
+			property_exists( $row, 'slot_content_id' ),
+			'$row->slot_content_id',
+			'must exist'
+		);
+		Assert::parameter(
+			property_exists( $row, 'content_address' ),
+			'$row->content_address',
+			'must exist'
+		);
+		Assert::parameter(
+			property_exists( $row, 'model_name' ),
+			'$row->model_name',
+			'must exist'
+		);
+		Assert::parameter(
+			property_exists( $row, 'slot_origin' ),
+			'$row->slot_origin',
+			'must exist'
+		);
+		Assert::parameter(
+			!property_exists( $row, 'slot_inherited' ),
+			'$row->slot_inherited',
+			'must not exist'
+		);
+		Assert::parameter(
+			!property_exists( $row, 'slot_revision' ),
+			'$row->slot_revision',
+			'must not exist'
+		);
 
 		$this->row = $row;
 		$this->content = $content;
@@ -217,7 +322,8 @@ class SlotRecord {
 	 * @param string $name
 	 *
 	 * @throws OutOfBoundsException
-	 * @return mixed Returns the field's value, or null if the field is NULL in the DB row.
+	 * @throws IncompleteRevisionException
+	 * @return mixed Returns the field's value, never null.
 	 */
 	private function getField( $name ) {
 		if ( !isset( $this->row->$name ) ) {
@@ -271,6 +377,13 @@ class SlotRecord {
 	 * @return bool whether this record contains the given field
 	 */
 	private function hasField( $name ) {
+		if ( isset( $this->row->$name ) ) {
+			// if the field is a callback, resolve first, then re-check
+			if ( !is_string( $this->row->$name ) && is_callable( $this->row->$name ) ) {
+				$this->getField( $name );
+			}
+		}
+
 		return isset( $this->row->$name );
 	}
 
@@ -280,16 +393,35 @@ class SlotRecord {
 	 * @return int
 	 */
 	public function getRevision() {
-		return $this->getIntField( 'slot_revision' );
+		return $this->getIntField( 'slot_revision_id' );
+	}
+
+	/**
+	 * Returns the revision ID of the revision that originated the slot's content.
+	 *
+	 * @return int
+	 */
+	public function getOrigin() {
+		return $this->getIntField( 'slot_origin' );
 	}
 
 	/**
 	 * Whether this slot was inherited from an older revision.
 	 *
+	 * If this SlotRecord is already attached to a revision, this returns true
+	 * if the slot's revision of origin is the same as the revision it belongs to.
+	 *
+	 * If this SlotRecord is not yet attached to a revision, this returns true
+	 * if the slot already has an address.
+	 *
 	 * @return bool
 	 */
 	public function isInherited() {
-		return $this->getIntField( 'slot_inherited' ) !== 0;
+		if ( $this->hasRevision() ) {
+			return $this->getRevision() !== $this->getOrigin();
+		} else {
+			return $this->hasAddress();
+		}
 	}
 
 	/**
@@ -300,7 +432,31 @@ class SlotRecord {
 	 * @return bool
 	 */
 	public function hasAddress() {
-		return $this->hasField( 'cont_address' );
+		return $this->hasField( 'content_address' );
+	}
+
+	/**
+	 * Whether this slot has an origin (revision ID that originated the slot's content.
+	 *
+	 * @since 1.32
+	 *
+	 * @return bool
+	 */
+	public function hasOrigin() {
+		return $this->hasField( 'slot_origin' );
+	}
+
+	/**
+	 * Whether this slot has a content ID. Slots will have a content ID if their
+	 * content has been stored in the content table. While building a new revision,
+	 * SlotRecords will not have an ID associated.
+	 *
+	 * @since 1.32
+	 *
+	 * @return bool
+	 */
+	public function hasContentId() {
+		return $this->hasField( 'slot_content_id' );
 	}
 
 	/**
@@ -311,7 +467,7 @@ class SlotRecord {
 	 * @return bool
 	 */
 	public function hasRevision() {
-		return $this->hasField( 'slot_revision' );
+		return $this->hasField( 'slot_revision_id' );
 	}
 
 	/**
@@ -330,7 +486,18 @@ class SlotRecord {
 	 * @return string
 	 */
 	public function getAddress() {
-		return $this->getStringField( 'cont_address' );
+		return $this->getStringField( 'content_address' );
+	}
+
+	/**
+	 * Returns the ID of the content meta data row associated with the slot.
+	 * This information should be irrelevant to application logic, it is here to allow
+	 * the construction of a full row for the revision table.
+	 *
+	 * @return int
+	 */
+	public function getContentId() {
+		return $this->getIntField( 'slot_content_id' );
 	}
 
 	/**
@@ -340,10 +507,10 @@ class SlotRecord {
 	 */
 	public function getSize() {
 		try {
-			$size = $this->getIntField( 'cont_size' );
+			$size = $this->getIntField( 'content_size' );
 		} catch ( IncompleteRevisionException $ex ) {
 			$size = $this->getContent()->getSize();
-			$this->setField( 'cont_size', $size );
+			$this->setField( 'content_size', $size );
 		}
 
 		return $size;
@@ -356,7 +523,7 @@ class SlotRecord {
 	 */
 	public function getSha1() {
 		try {
-			$sha1 = $this->getStringField( 'cont_sha1' );
+			$sha1 = $this->getStringField( 'content_sha1' );
 		} catch ( IncompleteRevisionException $ex ) {
 			$format = $this->hasField( 'format_name' )
 				? $this->getStringField( 'format_name' )
@@ -364,7 +531,7 @@ class SlotRecord {
 
 			$data = $this->getContent()->serialize( $format );
 			$sha1 = self::base36Sha1( $data );
-			$this->setField( 'cont_sha1', $sha1 );
+			$this->setField( 'content_sha1', $sha1 );
 		}
 
 		return $sha1;
@@ -425,6 +592,52 @@ class SlotRecord {
 	 */
 	public static function base36Sha1( $blob ) {
 		return \Wikimedia\base_convert( sha1( $blob ), 16, 36, 31 );
+	}
+
+	/**
+	 * Returns true if $other has the same content as this slot.
+	 * The check is performed based on the model, address size, and hash.
+	 * Two slots can have the same content if they use different content addresses,
+	 * but if they have the same address and the same model, they have the same content.
+	 * Two slots can have the same content if they belong to different
+	 * revisions or pages.
+	 *
+	 * Note that hasSameContent() may return false even if Content::equals returns true for
+	 * the content of two slots. This may happen if the two slots have different serializations
+	 * representing equivalent Content. Such false negatives are considered acceptable. Code
+	 * that has to be absolutely sure the Content is really not the same if hasSameContent()
+	 * returns false should call getContent() and compare the Content objects directly.
+	 *
+	 * @since 1.32
+	 *
+	 * @param SlotRecord $other
+	 * @return bool
+	 */
+	public function hasSameContent( SlotRecord $other ) {
+		if ( $other === $this ) {
+			return true;
+		}
+
+		if ( $this->getModel() !== $other->getModel() ) {
+			return false;
+		}
+
+		if ( $this->hasAddress()
+			&& $other->hasAddress()
+			&& $this->getAddress() == $other->getAddress()
+		) {
+			return true;
+		}
+
+		if ( $this->getSize() !== $other->getSize() ) {
+			return false;
+		}
+
+		if ( $this->getSha1() !== $other->getSha1() ) {
+			return false;
+		}
+
+		return true;
 	}
 
 }

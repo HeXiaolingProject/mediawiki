@@ -1,6 +1,6 @@
 <?php
 
-class JavaScriptMinifierTest extends PHPUnit_Framework_TestCase {
+class JavaScriptMinifierTest extends PHPUnit\Framework\TestCase {
 
 	use MediaWikiCoversValidator;
 
@@ -81,6 +81,18 @@ class JavaScriptMinifierTest extends PHPUnit_Framework_TestCase {
 				"var a = this //foo bar \n for ( b = 0; c < d; b++ ) {}",
 				"var a=this\nfor(b=0;c<d;b++){}"
 			],
+
+			// Cover failure case of incomplete regexp at end of file (T75556)
+			// FIXME: This is invalid, but currently tolerated
+			[ "*/", "*/", false ],
+
+			// Cover failure case of incomplete char class in regexp (T75556)
+			// FIXME: This is invalid, but currently tolerated
+			[ "/a[b/.test", "/a[b/.test", false ],
+
+			// Cover failure case of incomplete string at end of file (T75556)
+			// FIXME: This is invalid, but currently tolerated
+			[ "'a", "'a", false ],
 
 			// Token separation
 			[ "x  in  y", "x in y" ],
@@ -178,9 +190,9 @@ class JavaScriptMinifierTest extends PHPUnit_Framework_TestCase {
 		// JSMin+'s parser will throw an exception if output is not valid JS.
 		// suppression of warnings needed for stupid crap
 		if ( $expectedValid ) {
-			MediaWiki\suppressWarnings();
+			Wikimedia\suppressWarnings();
 			$parser = new JSParser();
-			MediaWiki\restoreWarnings();
+			Wikimedia\restoreWarnings();
 			$parser->parse( $minified, 'minify-test.js', 1 );
 		}
 

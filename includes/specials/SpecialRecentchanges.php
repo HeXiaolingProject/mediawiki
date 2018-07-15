@@ -22,7 +22,7 @@
  */
 
 use MediaWiki\MediaWikiServices;
-use Wikimedia\Rdbms\ResultWrapper;
+use Wikimedia\Rdbms\IResultWrapper;
 use Wikimedia\Rdbms\FakeResultWrapper;
 
 /**
@@ -35,6 +35,7 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 	protected static $savedQueriesPreferenceName = 'rcfilters-saved-queries';
 	protected static $daysPreferenceName = 'rcdays'; // Use general RecentChanges preference
 	protected static $limitPreferenceName = 'rcfilters-limit'; // Use RCFilters-specific preference
+	protected static $collapsedPreferenceName = 'rcfilters-rc-collapsed';
 
 	private $watchlistFilterGroupDefinition;
 
@@ -208,8 +209,12 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 		$reviewStatus = $this->getFilterGroup( 'reviewStatus' );
 		if ( $reviewStatus !== null ) {
 			// Conditional on feature being available and rights
-			$hidePatrolled = $reviewStatus->getFilter( 'hidepatrolled' );
-			$hidePatrolled->setDefault( $user->getBoolOption( 'hidepatrolled' ) );
+			if ( $user->getBoolOption( 'hidepatrolled' ) ) {
+				$reviewStatus->setDefault( 'unpatrolled' );
+				$legacyReviewStatus = $this->getFilterGroup( 'legacyReviewStatus' );
+				$legacyHidePatrolled = $legacyReviewStatus->getFilter( 'hidepatrolled' );
+				$legacyHidePatrolled->setDefault( true );
+			}
 		}
 
 		$changeType = $this->getFilterGroup( 'changeType' );
@@ -218,20 +223,6 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 			// Conditional on feature being available
 			$hideCategorization->setDefault( $user->getBoolOption( 'hidecategorization' ) );
 		}
-	}
-
-	/**
-	 * Get a FormOptions object containing the default options
-	 *
-	 * @return FormOptions
-	 */
-	public function getDefaultOptions() {
-		$opts = parent::getDefaultOptions();
-
-		$opts->add( 'categories', '' );
-		$opts->add( 'categories_any', false );
-
-		return $opts;
 	}
 
 	/**
@@ -359,11 +350,6 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 			$join_conds
 		);
 
-		// Build the final data
-		if ( $this->getConfig()->get( 'AllowCategorizedRecentChanges' ) ) {
-			$this->filterByCategories( $rows, $opts );
-		}
-
 		return $rows;
 	}
 
@@ -408,7 +394,7 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 	/**
 	 * Build and output the actual changes list.
 	 *
-	 * @param ResultWrapper $rows Database rows
+	 * @param IResultWrapper $rows Database rows
 	 * @param FormOptions $opts
 	 */
 	public function outputChangesList( $rows, $opts ) {
@@ -667,15 +653,11 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 	 */
 	function getExtraOptions( $opts ) {
 		$opts->consumeValues( [
-			'namespace', 'invert', 'associated', 'tagfilter', 'categories', 'categories_any'
+			'namespace', 'invert', 'associated', 'tagfilter'
 		] );
 
 		$extraOpts = [];
 		$extraOpts['namespace'] = $this->namespaceFilterForm( $opts );
-
-		if ( $this->getConfig()->get( 'AllowCategorizedRecentChanges' ) ) {
-			$extraOpts['category'] = $this->categoryFilterForm( $opts );
-		}
 
 		$tagFilter = ChangeTags::buildTagFilterSelector(
 			$opts['tagfilter'], false, $this->getContext() );
@@ -709,7 +691,7 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 	 */
 	public function checkLastModified() {
 		$dbr = $this->getDB();
-		$lastmod = $dbr->selectField( 'recentchanges', 'MAX(rc_timestamp)', false, __METHOD__ );
+		$lastmod = $dbr->selectField( 'recentchanges', 'MAX(rc_timestamp)', '', __METHOD__ );
 
 		return $lastmod;
 	}
@@ -741,28 +723,16 @@ class SpecialRecentChanges extends ChangesListSpecialPage {
 	}
 
 	/**
-	 * Create an input to filter changes by categories
-	 *
-	 * @param FormOptions $opts
-	 * @return array
-	 */
-	protected function categoryFilterForm( FormOptions $opts ) {
-		list( $label, $input ) = Xml::inputLabelSep( $this->msg( 'rc_categories' )->text(),
-			'categories', 'mw-categories', false, $opts['categories'] );
-
-		$input .= ' ' . Xml::checkLabel( $this->msg( 'rc_categories_any' )->text(),
-			'categories_any', 'mw-categories_any', $opts['categories_any'] );
-
-		return [ $label, $input ];
-	}
-
-	/**
 	 * Filter $rows by categories set in $opts
 	 *
-	 * @param ResultWrapper &$rows Database rows
+	 * @deprecated since 1.31
+	 *
+	 * @param IResultWrapper &$rows Database rows
 	 * @param FormOptions $opts
 	 */
 	function filterByCategories( &$rows, FormOptions $opts ) {
+		wfDeprecated( __METHOD__, '1.31' );
+
 		$categories = array_map( 'trim', explode( '|', $opts['categories'] ) );
 
 		if ( !count( $categories ) ) {

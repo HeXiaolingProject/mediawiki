@@ -87,17 +87,16 @@ class FileBackendMultiWrite extends FileBackend {
 	 *                      This will apply such updates post-send for web requests. Note that
 	 *                      any checks from "syncChecks" are still synchronous.
 	 *
+	 * Bogus warning
+	 * @suppress PhanAccessMethodProtected
+	 *
 	 * @param array $config
 	 * @throws FileBackendError
 	 */
 	public function __construct( array $config ) {
 		parent::__construct( $config );
-		$this->syncChecks = isset( $config['syncChecks'] )
-			? $config['syncChecks']
-			: self::CHECK_SIZE;
-		$this->autoResync = isset( $config['autoResync'] )
-			? $config['autoResync']
-			: false;
+		$this->syncChecks = $config['syncChecks'] ?? self::CHECK_SIZE;
+		$this->autoResync = $config['autoResync'] ?? false;
 		$this->asyncWrites = isset( $config['replication'] ) && $config['replication'] === 'async';
 		// Construct backends here rather than via registration
 		// to keep these backends hidden from outside the proxy.

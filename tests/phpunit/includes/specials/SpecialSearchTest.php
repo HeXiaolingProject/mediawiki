@@ -194,7 +194,7 @@ class SpecialSearchTest extends MediaWikiTestCase {
 		);
 
 		$mockSearchEngine = $this->mockSearchEngine( $searchResults );
-		$search = $this->getMockBuilder( 'SpecialSearch' )
+		$search = $this->getMockBuilder( SpecialSearch::class )
 			->setMethods( [ 'getSearchEngine' ] )
 			->getMock();
 		$search->expects( $this->any() )
@@ -213,7 +213,7 @@ class SpecialSearchTest extends MediaWikiTestCase {
 	}
 
 	protected function mockSearchEngine( $results ) {
-		$mock = $this->getMockBuilder( 'SearchEngine' )
+		$mock = $this->getMockBuilder( SearchEngine::class )
 			->setMethods( [ 'searchText', 'searchTitle' ] )
 			->getMock();
 
@@ -262,8 +262,8 @@ class SpecialSearchTestMockResultSet extends SearchResultSet {
 		$this->containedSyntax = $containedSyntax;
 	}
 
-	public function numRows() {
-		return count( $this->results );
+	public function expandResults() {
+		return $this->results;
 	}
 
 	public function getTotalHits() {

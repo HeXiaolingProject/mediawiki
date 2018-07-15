@@ -1,9 +1,5 @@
 <?php
 /**
- *
- *
- * Created on Sep 24, 2006
- *
  * Copyright © 2006, 2013 Yuri Astrakhan "<Firstname><Lastname>@gmail.com"
  *
  * This program is free software; you can redistribute it and/or modify
@@ -464,7 +460,7 @@ class ApiPageSet extends ApiBase {
 	/**
 	 * Get a list of redirect resolutions - maps a title to its redirect
 	 * target. Includes generator data for redirect source when available.
-	 * @param ApiResult $result
+	 * @param ApiResult|null $result
 	 * @return array Array of prefixed_title (string) => Title object
 	 * @since 1.21
 	 */
@@ -511,7 +507,7 @@ class ApiPageSet extends ApiBase {
 	/**
 	 * Get a list of title normalizations - maps a title to its normalized
 	 * version in the form of result array.
-	 * @param ApiResult $result
+	 * @param ApiResult|null $result
 	 * @return array Array of raw_prefixed_title (string) => prefixed_title (string)
 	 * @since 1.21
 	 */
@@ -546,7 +542,7 @@ class ApiPageSet extends ApiBase {
 	/**
 	 * Get a list of title conversions - maps a title to its converted
 	 * version as a result array.
-	 * @param ApiResult $result
+	 * @param ApiResult|null $result
 	 * @return array Array of (from, to) strings
 	 * @since 1.21
 	 */
@@ -577,7 +573,7 @@ class ApiPageSet extends ApiBase {
 	/**
 	 * Get a list of interwiki titles - maps a title to its interwiki
 	 * prefix as result.
-	 * @param ApiResult $result
+	 * @param ApiResult|null $result
 	 * @param bool $iwUrl
 	 * @return array Array of raw_prefixed_title (string) => interwiki_prefix (string)
 	 * @since 1.21
@@ -696,7 +692,7 @@ class ApiPageSet extends ApiBase {
 
 	/**
 	 * Revision IDs that were not found in the database as result array.
-	 * @param ApiResult $result
+	 * @param ApiResult|null $result
 	 * @return array Array of revision IDs
 	 * @since 1.21
 	 */
@@ -775,7 +771,8 @@ class ApiPageSet extends ApiBase {
 		// Store Title object in various data structures
 		$title = Title::newFromRow( $row );
 
-		LinkCache::singleton()->addGoodLinkObjFromRow( $title, $row );
+		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
+		$linkCache->addGoodLinkObjFromRow( $title, $row );
 
 		$pageId = intval( $row->page_id );
 		$this->mAllPages[$row->page_namespace][$row->page_title] = $pageId;
@@ -908,7 +905,7 @@ class ApiPageSet extends ApiBase {
 			// Any items left in the $remaining list are added as missing
 			if ( $processTitles ) {
 				// The remaining titles in $remaining are non-existent pages
-				$linkCache = LinkCache::singleton();
+				$linkCache = MediaWikiServices::getInstance()->getLinkCache();
 				foreach ( $remaining as $ns => $dbkeys ) {
 					foreach ( array_keys( $dbkeys ) as $dbkey ) {
 						$title = Title::makeTitle( $ns, $dbkey );
@@ -1203,7 +1200,7 @@ class ApiPageSet extends ApiBase {
 				// Variants checking
 				global $wgContLang;
 				if ( $this->mConvertTitles &&
-					count( $wgContLang->getVariants() ) > 1 &&
+					$wgContLang->hasVariants() &&
 					!$titleObj->exists()
 				) {
 					// Language::findVariantLink will modify titleText and titleObj into
@@ -1532,7 +1529,7 @@ class ApiPageSet extends ApiBase {
 			$prefix = $query->getModulePath() . '+';
 			$mgr = $query->getModuleManager();
 			foreach ( $mgr->getNamesWithClasses() as $name => $class ) {
-				if ( is_subclass_of( $class, 'ApiQueryGeneratorBase' ) ) {
+				if ( is_subclass_of( $class, ApiQueryGeneratorBase::class ) ) {
 					$gens[$name] = $prefix . $name;
 				}
 			}

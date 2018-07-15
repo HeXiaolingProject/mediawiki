@@ -58,8 +58,8 @@ class PrefixSearchTest extends MediaWikiLangTestCase {
 			'wgCapitalLinkOverrides' => [ self::NS_NONCAP => false ],
 		] );
 
-		$this->originalHandlers = TestingAccessWrapper::newFromClass( 'Hooks' )->handlers;
-		TestingAccessWrapper::newFromClass( 'Hooks' )->handlers = [];
+		$this->originalHandlers = TestingAccessWrapper::newFromClass( Hooks::class )->handlers;
+		TestingAccessWrapper::newFromClass( Hooks::class )->handlers = [];
 
 		// Clear caches so that our new namespace appears
 		MWNamespace::clearCaches();
@@ -74,7 +74,7 @@ class PrefixSearchTest extends MediaWikiLangTestCase {
 
 		parent::tearDown();
 
-		TestingAccessWrapper::newFromClass( 'Hooks' )->handlers = $this->originalHandlers;
+		TestingAccessWrapper::newFromClass( Hooks::class )->handlers = $this->originalHandlers;
 
 		SpecialPageFactory::resetList();
 	}
@@ -211,7 +211,7 @@ class PrefixSearchTest extends MediaWikiLangTestCase {
 	public function testSearch( array $case ) {
 		$this->searchProvision( null );
 
-		$namespaces = isset( $case['namespaces'] ) ? $case['namespaces'] : [];
+		$namespaces = $case['namespaces'] ?? [];
 
 		if ( wfGetDB( DB_REPLICA )->getType() === 'postgres' ) {
 			// Postgres will sort lexicographically on utf8 code units (" " before "/")
@@ -235,7 +235,7 @@ class PrefixSearchTest extends MediaWikiLangTestCase {
 	public function testSearchWithOffset( array $case ) {
 		$this->searchProvision( null );
 
-		$namespaces = isset( $case['namespaces'] ) ? $case['namespaces'] : [];
+		$namespaces = $case['namespaces'] ?? [];
 
 		$searcher = new StringPrefixSearch;
 		$results = $searcher->search( $case['query'], 3, $namespaces, 1 );

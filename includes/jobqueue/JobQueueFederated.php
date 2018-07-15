@@ -73,15 +73,11 @@ class JobQueueFederated extends JobQueue {
 	 */
 	protected function __construct( array $params ) {
 		parent::__construct( $params );
-		$section = isset( $params['sectionsByWiki'][$this->wiki] )
-			? $params['sectionsByWiki'][$this->wiki]
-			: 'default';
+		$section = $params['sectionsByWiki'][$this->wiki] ?? 'default';
 		if ( !isset( $params['partitionsBySection'][$section] ) ) {
 			throw new MWException( "No configuration for section '$section'." );
 		}
-		$this->maxPartitionsTry = isset( $params['maxPartitionsTry'] )
-			? $params['maxPartitionsTry']
-			: 2;
+		$this->maxPartitionsTry = $params['maxPartitionsTry'] ?? 2;
 		// Get the full partition map
 		$partitionMap = $params['partitionsBySection'][$section];
 		arsort( $partitionMap, SORT_NUMERIC );
@@ -187,7 +183,7 @@ class JobQueueFederated extends JobQueue {
 		// phpcs:ignore Generic.CodeAnalysis.ForLoopWithTestFunctionCall
 		for ( $i = $this->maxPartitionsTry; $i > 0 && count( $jobsLeft ); --$i ) {
 			try {
-				$partitionRing->getLiveRing();
+				$partitionRing->getLiveLocationWeights();
 			} catch ( UnexpectedValueException $e ) {
 				break; // all servers down; nothing to insert to
 			}

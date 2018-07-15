@@ -1,6 +1,6 @@
 // Common Less mixin library for MediaWiki
 //
-// By default the folder containing this file is included in $wgResourceLoaderLESSImportPaths,
+// By default the folder containing this file is included in the LESS import paths,
 // which makes this file importable by all less files via `@import 'mediawiki.mixins';`.
 //
 // The mixins included below are considered a public interface for MediaWiki extensions.
@@ -21,7 +21,6 @@
 
 .vertical-gradient( @startColor: gray, @endColor: white, @startPos: 0, @endPos: 100% ) {
 	background-color: @endColor;
-	background-image: -webkit-gradient( linear, left top, left bottom, color-stop( @startPos, @startColor ), color-stop( @endPos, @endColor ) ); // Safari 4+, Chrome 2+
 	background-image: -webkit-linear-gradient( top, @startColor @startPos, @endColor @endPos ); // Safari 5.1+, Chrome 10+
 	background-image: -moz-linear-gradient( top, @startColor @startPos, @endColor @endPos ); // Firefox 3.6+
 	background-image: linear-gradient( @startColor @startPos, @endColor @endPos ); // Standard
@@ -30,8 +29,6 @@
 // SVG support using a transparent gradient to guarantee cross-browser
 // compatibility (browsers able to understand gradient syntax support also SVG).
 // http://pauginer.tumblr.com/post/36614680636/invisible-gradient-technique
-//
-// We use gzip compression, which means that it is okay to embed twice.
 //
 // We do not embed the fallback image on the assumption that the gain for old browsers
 // is not worth the harm done to modern ones.
@@ -54,6 +51,25 @@
 	list-style-image: e( '/* @embed */' ) url( @svg );
 	/* Fallback to PNG bullet for IE 8 and below using CSS hack */
 	list-style-image: e( '/* @embed */' ) url( @fallback ) e( '\9' );
+}
+
+.hyphens( @value: auto ) {
+	& when ( @value = auto ){
+		// Legacy `word-wrap`; IE 6-11, Edge 12+, Firefox 3.5+, Chrome 4+, Safari 3.1+,
+		//   Opera 11.5+, iOS 3.2+, Android 2.1+
+		// `overflow-wrap` is W3 standard, but it doesn't seem as if browser vendors
+		//   will abandon `word-wrap` (it has wider support), therefore no duplication.
+		word-wrap: break-word;
+	}
+	& when ( @value = none ) {
+		word-wrap: normal;
+	}
+
+	// CSS3 hyphenation
+	-webkit-hyphens: @value; // Safari 5.1+, iOS 4.3+
+	-moz-hyphens: @value;    // Firefox 6-42
+	-ms-hyphens: @value;     // IE 10-11, Edge 12+
+	hyphens: @value;         // Firefox 43+, Chrome 55+, Android 62+, UC Browser 11.8+, Samsung 6.2+
 }
 
 .transform( @value ) {

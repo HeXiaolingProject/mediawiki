@@ -13,7 +13,7 @@ use Wikimedia\Rdbms\LoadBalancer;
  * @file
  * @ingroup Watchlist
  *
- * @license GNU GPL v2+
+ * @license GPL-2.0-or-later
  */
 class WatchedItemQueryService {
 
@@ -25,6 +25,7 @@ class WatchedItemQueryService {
 	const INCLUDE_USER_ID = 'userid';
 	const INCLUDE_COMMENT = 'comment';
 	const INCLUDE_PATROL_INFO = 'patrol';
+	const INCLUDE_AUTOPATROL_INFO = 'autopatrol';
 	const INCLUDE_SIZES = 'sizes';
 	const INCLUDE_LOG_INFO = 'loginfo';
 	const INCLUDE_TAGS = 'tags';
@@ -40,6 +41,8 @@ class WatchedItemQueryService {
 	const FILTER_NOT_ANON = '!anon';
 	const FILTER_PATROLLED = 'patrolled';
 	const FILTER_NOT_PATROLLED = '!patrolled';
+	const FILTER_AUTOPATROLLED = 'autopatrolled';
+	const FILTER_NOT_AUTOPATROLLED = '!autopatrolled';
 	const FILTER_UNREAD = 'unread';
 	const FILTER_NOT_UNREAD = '!unread';
 	const FILTER_CHANGED = 'changed';
@@ -56,12 +59,20 @@ class WatchedItemQueryService {
 	/** @var WatchedItemQueryServiceExtension[]|null */
 	private $extensions = null;
 
-	/**
-	 * @var CommentStore|null */
-	private $commentStore = null;
+	/** @var CommentStore */
+	private $commentStore;
 
-	public function __construct( LoadBalancer $loadBalancer ) {
+	/** @var ActorMigration */
+	private $actorMigration;
+
+	public function __construct(
+		LoadBalancer $loadBalancer,
+		CommentStore $commentStore,
+		ActorMigration $actorMigration
+	) {
 		$this->loadBalancer = $loadBalancer;
+		$this->commentStore = $commentStore;
+		$this->actorMigration = $actorMigration;
 	}
 
 	/**
@@ -81,13 +92,6 @@ class WatchedItemQueryService {
 	 */
 	private function getConnection() {
 		return $this->loadBalancer->getConnectionRef( DB_REPLICA, [ 'watchlist' ] );
-	}
-
-	private function getCommentStore() {
-		if ( !$this->commentStore ) {
-			$this->commentStore = new CommentStore( 'rc_comment' );
-		}
-		return $this->commentStore;
 	}
 
 	/**
@@ -216,7 +220,7 @@ class WatchedItemQueryService {
 			$joinConds
 		);
 
-		$limit = isset( $dbOptions['LIMIT'] ) ? $dbOptions['LIMIT'] : INF;
+		$limit = $dbOptions['LIMIT'] ?? INF;
 		$items = [];
 		$startFrom = null;
 		foreach ( $res as $row ) {
@@ -316,8 +320,8 @@ class WatchedItemQueryService {
 	}
 
 	private function getRecentChangeFieldsFromRow( stdClass $row ) {
-		// This can be simplified to single array_filter call filtering by key value,
-		// once we stop supporting PHP 5.5
+		// FIXME: This can be simplified to single array_filter call filtering by key value,
+		// now we have stopped supporting PHP 5.5
 		$allFields = get_object_vars( $row );
 		$rcKeys = array_filter(
 			array_keys( $allFields ),
@@ -334,10 +338,18 @@ class WatchedItemQueryService {
 			$tables[] = 'page';
 		}
 		if ( in_array( self::INCLUDE_COMMENT, $options['includeFields'] ) ) {
-			$tables += $this->getCommentStore()->getJoin()['tables'];
+			$tables += $this->commentStore->getJoin( 'rc_comment' )['tables'];
 		}
 		if ( in_array( self::INCLUDE_TAGS, $options['includeFields'] ) ) {
 			$tables[] = 'tag_summary';
+		}
+		if ( in_array( self::INCLUDE_USER, $options['includeFields'] ) ||
+			in_array( self::INCLUDE_USER_ID, $options['includeFields'] ) ||
+			in_array( self::FILTER_ANON, $options['filters'] ) ||
+			in_array( self::FILTER_NOT_ANON, $options['filters'] ) ||
+			array_key_exists( 'onlyByUser', $options ) || array_key_exists( 'notByUser', $options )
+		) {
+			$tables += $this->actorMigration->getJoin( 'rc_user' )['tables'];
 		}
 		return $tables;
 	}
@@ -371,13 +383,13 @@ class WatchedItemQueryService {
 			$fields = array_merge( $fields, [ 'rc_type', 'rc_minor', 'rc_bot' ] );
 		}
 		if ( in_array( self::INCLUDE_USER, $options['includeFields'] ) ) {
-			$fields[] = 'rc_user_text';
+			$fields['rc_user_text'] = $this->actorMigration->getJoin( 'rc_user' )['fields']['rc_user_text'];
 		}
 		if ( in_array( self::INCLUDE_USER_ID, $options['includeFields'] ) ) {
-			$fields[] = 'rc_user';
+			$fields['rc_user'] = $this->actorMigration->getJoin( 'rc_user' )['fields']['rc_user'];
 		}
 		if ( in_array( self::INCLUDE_COMMENT, $options['includeFields'] ) ) {
-			$fields += $this->getCommentStore()->getJoin()['fields'];
+			$fields += $this->commentStore->getJoin( 'rc_comment' )['fields'];
 		}
 		if ( in_array( self::INCLUDE_PATROL_INFO, $options['includeFields'] ) ) {
 			$fields = array_merge( $fields, [ 'rc_patrolled', 'rc_log_type' ] );
@@ -473,18 +485,28 @@ class WatchedItemQueryService {
 		}
 
 		if ( in_array( self::FILTER_ANON, $options['filters'] ) ) {
-			$conds[] = 'rc_user = 0';
+			$conds[] = $this->actorMigration->isAnon(
+				$this->actorMigration->getJoin( 'rc_user' )['fields']['rc_user']
+			);
 		} elseif ( in_array( self::FILTER_NOT_ANON, $options['filters'] ) ) {
-			$conds[] = 'rc_user != 0';
+			$conds[] = $this->actorMigration->isNotAnon(
+				$this->actorMigration->getJoin( 'rc_user' )['fields']['rc_user']
+			);
 		}
 
 		if ( $user->useRCPatrol() || $user->useNPPatrol() ) {
 			// TODO: not sure if this should simply ignore patrolled filters if user does not have the patrol
 			// right, or maybe rather fail loud at this point, same as e.g. ApiQueryWatchlist does?
 			if ( in_array( self::FILTER_PATROLLED, $options['filters'] ) ) {
-				$conds[] = 'rc_patrolled != 0';
+				$conds[] = 'rc_patrolled != ' . RecentChange::PRC_UNPATROLLED;
 			} elseif ( in_array( self::FILTER_NOT_PATROLLED, $options['filters'] ) ) {
-				$conds[] = 'rc_patrolled = 0';
+				$conds['rc_patrolled'] = RecentChange::PRC_UNPATROLLED;
+			}
+
+			if ( in_array( self::FILTER_AUTOPATROLLED, $options['filters'] ) ) {
+				$conds['rc_patrolled'] = RecentChange::PRC_AUTOPATROLLED;
+			} elseif ( in_array( self::FILTER_NOT_AUTOPATROLLED, $options['filters'] ) ) {
+				$conds[] = 'rc_patrolled != ' . RecentChange::PRC_AUTOPATROLLED;
 			}
 		}
 
@@ -527,9 +549,11 @@ class WatchedItemQueryService {
 		$conds = [];
 
 		if ( array_key_exists( 'onlyByUser', $options ) ) {
-			$conds['rc_user_text'] = $options['onlyByUser'];
+			$byUser = User::newFromName( $options['onlyByUser'], false );
+			$conds[] = $this->actorMigration->getWhere( $db, 'rc_user', $byUser )['conds'];
 		} elseif ( array_key_exists( 'notByUser', $options ) ) {
-			$conds[] = 'rc_user_text != ' . $db->addQuotes( $options['notByUser'] );
+			$byUser = User::newFromName( $options['notByUser'], false );
+			$conds[] = 'NOT(' . $this->actorMigration->getWhere( $db, 'rc_user', $byUser )['conds'] . ')';
 		}
 
 		// Avoid brute force searches (T19342)
@@ -684,10 +708,18 @@ class WatchedItemQueryService {
 			$joinConds['page'] = [ 'LEFT JOIN', 'rc_cur_id=page_id' ];
 		}
 		if ( in_array( self::INCLUDE_COMMENT, $options['includeFields'] ) ) {
-			$joinConds += $this->getCommentStore()->getJoin()['joins'];
+			$joinConds += $this->commentStore->getJoin( 'rc_comment' )['joins'];
 		}
 		if ( in_array( self::INCLUDE_TAGS, $options['includeFields'] ) ) {
 			$joinConds['tag_summary'] = [ 'LEFT JOIN', [ 'rc_id=ts_rc_id' ] ];
+		}
+		if ( in_array( self::INCLUDE_USER, $options['includeFields'] ) ||
+			in_array( self::INCLUDE_USER_ID, $options['includeFields'] ) ||
+			in_array( self::FILTER_ANON, $options['filters'] ) ||
+			in_array( self::FILTER_NOT_ANON, $options['filters'] ) ||
+			array_key_exists( 'onlyByUser', $options ) || array_key_exists( 'notByUser', $options )
+		) {
+			$joinConds += $this->actorMigration->getJoin( 'rc_user' )['joins'];
 		}
 		return $joinConds;
 	}

@@ -46,7 +46,7 @@ class XCFHandler extends BitmapHandler {
 	 *
 	 * @param string $ext
 	 * @param string $mime
-	 * @param array $params
+	 * @param array|null $params
 	 * @return array
 	 */
 	function getThumbType( $ext, $mime, $params = null ) {
@@ -217,9 +217,9 @@ class XCFHandler extends BitmapHandler {
 	 * @return bool
 	 */
 	public function canRender( $file ) {
-		MediaWiki\suppressWarnings();
+		Wikimedia\suppressWarnings();
 		$xcfMeta = unserialize( $file->getMetadata() );
-		MediaWiki\restoreWarnings();
+		Wikimedia\restoreWarnings();
 		if ( isset( $xcfMeta['colorType'] ) && $xcfMeta['colorType'] === 'index-coloured' ) {
 			return false;
 		}

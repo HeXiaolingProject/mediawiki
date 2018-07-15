@@ -161,9 +161,9 @@ class GIFMetadataExtractor {
 					UtfNormal\Validator::quickIsNFCVerify( $dataCopy );
 
 					if ( $dataCopy !== $data ) {
-						MediaWiki\suppressWarnings();
+						Wikimedia\suppressWarnings();
 						$data = iconv( 'windows-1252', 'UTF-8', $data );
-						MediaWiki\restoreWarnings();
+						Wikimedia\restoreWarnings();
 					}
 
 					$commentCount = count( $comment );
@@ -264,7 +264,7 @@ class GIFMetadataExtractor {
 	 */
 	static function readGCT( $fh, $bpp ) {
 		if ( $bpp > 0 ) {
-			$max = pow( 2, $bpp );
+			$max = 2 ** $bpp;
 			for ( $i = 1; $i <= $max; ++$i ) {
 				fread( $fh, 3 );
 			}

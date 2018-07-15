@@ -463,12 +463,12 @@ class Sanitizer {
 	 * Cleans up HTML, removes dangerous tags and attributes, and
 	 * removes HTML comments
 	 * @param string $text
-	 * @param callable $processCallback Callback to do any variable or parameter
+	 * @param callable|null $processCallback Callback to do any variable or parameter
 	 *   replacements in HTML attribute values
 	 * @param array|bool $args Arguments for the processing callback
 	 * @param array $extratags For any extra tags to include
 	 * @param array $removetags For any tags (default or extra) to exclude
-	 * @param callable $warnCallback (Deprecated) Callback allowing the
+	 * @param callable|null $warnCallback (Deprecated) Callback allowing the
 	 *   addition of a tracking category when bad input is encountered.
 	 *   DO NOT ADD NEW PARAMETERS AFTER $warnCallback, since it will be
 	 *   removed shortly.
@@ -515,9 +515,9 @@ class Sanitizer {
 						$badtag = true;
 					} elseif ( $slash ) {
 						# Closing a tag... is it the one we just opened?
-						MediaWiki\suppressWarnings();
+						Wikimedia\suppressWarnings();
 						$ot = array_pop( $tagstack );
-						MediaWiki\restoreWarnings();
+						Wikimedia\restoreWarnings();
 
 						if ( $ot != $t ) {
 							if ( isset( $htmlsingleallowed[$ot] ) ) {
@@ -525,32 +525,32 @@ class Sanitizer {
 								# and see if we find a match below them
 								$optstack = [];
 								array_push( $optstack, $ot );
-								MediaWiki\suppressWarnings();
+								Wikimedia\suppressWarnings();
 								$ot = array_pop( $tagstack );
-								MediaWiki\restoreWarnings();
+								Wikimedia\restoreWarnings();
 								while ( $ot != $t && isset( $htmlsingleallowed[$ot] ) ) {
 									array_push( $optstack, $ot );
-									MediaWiki\suppressWarnings();
+									Wikimedia\suppressWarnings();
 									$ot = array_pop( $tagstack );
-									MediaWiki\restoreWarnings();
+									Wikimedia\restoreWarnings();
 								}
 								if ( $t != $ot ) {
 									# No match. Push the optional elements back again
 									$badtag = true;
-									MediaWiki\suppressWarnings();
+									Wikimedia\suppressWarnings();
 									$ot = array_pop( $optstack );
-									MediaWiki\restoreWarnings();
+									Wikimedia\restoreWarnings();
 									while ( $ot ) {
 										array_push( $tagstack, $ot );
-										MediaWiki\suppressWarnings();
+										Wikimedia\suppressWarnings();
 										$ot = array_pop( $optstack );
-										MediaWiki\restoreWarnings();
+										Wikimedia\restoreWarnings();
 									}
 								}
 							} else {
-								MediaWiki\suppressWarnings();
+								Wikimedia\suppressWarnings();
 								array_push( $tagstack, $ot );
-								MediaWiki\restoreWarnings();
+								Wikimedia\restoreWarnings();
 
 								# <li> can be nested in <ul> or <ol>, skip those cases:
 								if ( !isset( $htmllist[$ot] ) || !isset( $listtags[$t] ) ) {
@@ -1142,6 +1142,28 @@ class Sanitizer {
 	}
 
 	/**
+	 * Armor French spaces with a replacement character
+	 *
+	 * @since 1.32
+	 * @param string $text Text to armor
+	 * @param string $space Space character for the French spaces, defaults to '&#160;'
+	 * @return string Armored text
+	 */
+	public static function armorFrenchSpaces( $text, $space = '&#160;' ) {
+		// Replace $ with \$ and \ with \\
+		$space = preg_replace( '#(?<!\\\\)(\\$|\\\\)#', '\\\\$1', $space );
+		$fixtags = [
+			# French spaces, last one Guillemet-left
+			# only if there is something before the space
+			# and a non-word character after the punctuation.
+			'/(\S) (?=[?:;!%»›](?!\w))/u' => "\\1$space",
+			# French spaces, Guillemet-right
+			'/([«‹]) /u' => "\\1$space",
+		];
+		return preg_replace( array_keys( $fixtags ), array_values( $fixtags ), $text );
+	}
+
+	/**
 	 * Encode an attribute value for HTML tags, with extra armoring
 	 * against further wiki processing.
 	 * @param string $text
@@ -1168,23 +1190,27 @@ class Sanitizer {
 			'__'   => '&#95;_',
 		] );
 
+		# Armor against French spaces detection (T5158)
+		$encValue = self::armorFrenchSpaces( $encValue, '&#32;' );
+
 		# Stupid hack
 		$encValue = preg_replace_callback(
 			'/((?i)' . wfUrlProtocols() . ')/',
-			[ 'Sanitizer', 'armorLinksCallback' ],
+			function ( $matches ) {
+				return str_replace( ':', '&#58;', $matches[1] );
+			},
 			$encValue );
 		return $encValue;
 	}
 
 	/**
 	 * Given a value, escape it so that it can be used in an id attribute and
-	 * return it.  This will use HTML5 validation if $wgExperimentalHtmlIds is
-	 * true, allowing anything but ASCII whitespace.  Otherwise it will use
-	 * HTML 4 rules, which means a narrow subset of ASCII, with bad characters
-	 * escaped with lots of dots.
+	 * return it.  This will use HTML5 validation, allowing anything but ASCII
+	 * whitespace.
 	 *
-	 * To ensure we don't have to bother escaping anything, we also strip ', ",
-	 * & even if $wgExperimentalIds is true.  TODO: Is this the best tactic?
+	 * To ensure we don't have to bother escaping anything, we also strip ', ".
+	 * TODO: Is this the best tactic?
+	 *
 	 * We also strip # because it upsets IE, and % because it could be
 	 * ambiguous if it's part of something that looks like a percent escape
 	 * (which don't work reliably in fragments cross-browser).
@@ -1202,27 +1228,11 @@ class Sanitizer {
 	 * @param string|array $options String or array of strings (default is array()):
 	 *   'noninitial': This is a non-initial fragment of an id, not a full id,
 	 *       so don't pay attention if the first character isn't valid at the
-	 *       beginning of an id.  Only matters if $wgExperimentalHtmlIds is
-	 *       false.
-	 *   'legacy': Behave the way the old HTML 4-based ID escaping worked even
-	 *       if $wgExperimentalHtmlIds is used, so we can generate extra
-	 *       anchors and links won't break.
+	 *       beginning of an id.
 	 * @return string
 	 */
 	static function escapeId( $id, $options = [] ) {
-		global $wgExperimentalHtmlIds;
 		$options = (array)$options;
-
-		if ( $wgExperimentalHtmlIds && !in_array( 'legacy', $options ) ) {
-			$id = preg_replace( '/[ \t\n\r\f_\'"&#%]+/', '_', $id );
-			$id = trim( $id, '_' );
-			if ( $id === '' ) {
-				// Must have been all whitespace to start with.
-				return '_';
-			} else {
-				return $id;
-			}
-		}
 
 		// HTML4-style escaping
 		static $replace = [
@@ -1335,14 +1345,6 @@ class Sanitizer {
 				$id = urlencode( str_replace( ' ', '_', $id ) );
 				$id = strtr( $id, $replace );
 				break;
-			case 'html5-legacy':
-				$id = preg_replace( '/[ \t\n\r\f_\'"&#%]+/', '_', $id );
-				$id = trim( $id, '_' );
-				if ( $id === '' ) {
-					// Must have been all whitespace to start with.
-					$id = '_';
-				}
-				break;
 			default:
 				throw new InvalidArgumentException( "Invalid mode '$mode' passed to '" . __METHOD__ );
 		}
@@ -1414,15 +1416,6 @@ class Sanitizer {
 		# don't cause the entire string to disappear.
 		$html = htmlspecialchars( $html, ENT_QUOTES | ENT_SUBSTITUTE );
 		return $html;
-	}
-
-	/**
-	 * Regex replace callback for armoring links against further processing.
-	 * @param array $matches
-	 * @return string
-	 */
-	private static function armorLinksCallback( $matches ) {
-		return str_replace( ':', '&#58;', $matches[1] );
 	}
 
 	/**
@@ -1549,7 +1542,7 @@ class Sanitizer {
 	static function normalizeCharReferences( $text ) {
 		return preg_replace_callback(
 			self::CHAR_REFS_REGEX,
-			[ 'Sanitizer', 'normalizeCharReferencesCallback' ],
+			[ self::class, 'normalizeCharReferencesCallback' ],
 			$text );
 	}
 
@@ -1649,7 +1642,7 @@ class Sanitizer {
 	public static function decodeCharReferences( $text ) {
 		return preg_replace_callback(
 			self::CHAR_REFS_REGEX,
-			[ 'Sanitizer', 'decodeCharReferencesCallback' ],
+			[ self::class, 'decodeCharReferencesCallback' ],
 			$text );
 	}
 
@@ -1667,7 +1660,7 @@ class Sanitizer {
 		global $wgContLang;
 		$text = preg_replace_callback(
 			self::CHAR_REFS_REGEX,
-			[ 'Sanitizer', 'decodeCharReferencesCallback' ],
+			[ self::class, 'decodeCharReferencesCallback' ],
 			$text,
 			-1, //limit
 			$count
@@ -1738,9 +1731,7 @@ class Sanitizer {
 	 */
 	static function attributeWhitelist( $element ) {
 		$list = self::setupAttributeWhitelist();
-		return isset( $list[$element] )
-			? $list[$element]
-			: [];
+		return $list[$element] ?? [];
 	}
 
 	/**

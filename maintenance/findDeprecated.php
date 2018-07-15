@@ -59,7 +59,7 @@ class DeprecatedInterfaceFinder extends FileAwareNodeVisitor {
 		// Sort results by version, then by filename, then by name.
 		foreach ( $this->foundNodes as $version => &$nodes ) {
 			uasort( $nodes, function ( $a, $b ) {
-				return ( $a['filename'] . $a['name'] ) < ( $b['filename'] . $b['name'] ) ? -1 : 1;
+				return ( $a['filename'] . $a['name'] ) <=> ( $b['filename'] . $b['name'] );
 			} );
 		}
 		ksort( $this->foundNodes );
@@ -202,5 +202,5 @@ class FindDeprecated extends Maintenance {
 	}
 }
 
-$maintClass = 'FindDeprecated';
+$maintClass = FindDeprecated::class;
 require_once RUN_MAINTENANCE_IF_MAIN;

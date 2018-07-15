@@ -22,7 +22,7 @@
  * Profiler that only tracks explicit profiling sections
  *
  * @code
- * $wgProfiler['class'] = 'ProfilerSectionOnly';
+ * $wgProfiler['class'] = ProfilerSectionOnly::class;
  * $wgProfiler['output'] = 'text';
  * $wgProfiler['visible'] = true;
  * @endcode
@@ -73,10 +73,7 @@ class ProfilerSectionOnly extends Profiler {
 	protected function getFunctionReport() {
 		$data = $this->getFunctionStats();
 		usort( $data, function ( $a, $b ) {
-			if ( $a['real'] === $b['real'] ) {
-				return 0;
-			}
-			return ( $a['real'] > $b['real'] ) ? -1 : 1; // descending
+			return $b['real'] <=> $a['real']; // descending
 		} );
 
 		$width = 140;
